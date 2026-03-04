@@ -198,14 +198,7 @@ class Problem:
 
         self.weakform = weakform
 
-        # ! Need to implement
-        # Access the connectivity for each space
-        # Initialize the space type for each dof
-        # Stores info about whether the dof is associated H1/Hcurl/Hdiv/L2
-        # self.soln_dof = self.mesh.create_dof(self.soln_space, "soln")
-        # self.data_dof = self.mesh.create_dof(self.data_space, "data")
-        # self.geo_dof = self.mesh.create_dof(self.geo_space, "geo")
-
+        # Initialize Dof's
         self.soln_dof = DegreesOfFreedom(mesh, "H1", "soln")
         self.geo_dof = DegreesOfFreedom(mesh, "H1", "geo")
         self.data_dof = DegreesOfFreedom(mesh, "H1", "data")
@@ -214,33 +207,17 @@ class Problem:
 
     def create_model(self, module_name: str):
         """Create and link the Amigo model"""
-
         model = am.Model(module_name)
 
-        # Get the degrees of freedom associated with H1
-        # self.soln_dof.add_source(model)
-        # self.data_dof.add_source(model)
-        # self.geo_dof.add_source(model)
-
+        # Get the names of things associated with H1
         input_names = self.soln_space.get_names("H1")  # rho
         data_names = self.data_space.get_names("H1")  # x, y
         geo_names = self.geo_space.get_names("H1")  # x, y
 
-        # a generalized amigo source component
-        """
-        class DofSource(am.Component):
-            def __init__(self):
-                super().__init__()
-
-                # Filter input values
-                self.add_input("rho")
-                self.add_data("x")
-                self.add_data("y")
-
-        self.dof_src = DofSource()
-        model.add_component("src", nnodes, node_src)
-        """
+        # Create amigo component with input names and geo names
         self.dof_src = DofSource(input_names=input_names, geo_names=geo_names)
+
+        # Add global mesh source component
         nnodes = mesh.get_num_nodes()
         model.add_component("src", nnodes, self.dof_src)
 
@@ -248,21 +225,17 @@ class Problem:
         domains = self.mesh.get_domains()
         for domain in domains:
             for etype in domains[domain]:
-                """
-                helmholtz = Helmholtz()
-                """
                 # Build a finite-element for each weak form
                 elem_name = f"Element{etype}_{domain}"
 
-                # basis.TriangleLagrangeBasis() objects
                 soln_basis = self.soln_dof.get_basis(
-                    etype, "H1", names=["rho"], kind="input"
+                    etype, "H1", names=input_names, kind="input"
                 )
                 data_basis = self.data_dof.get_basis(
-                    etype, "H1", names=["x", "y"], kind="data"
+                    etype, "H1", names=data_names, kind="data"
                 )
                 geo_basis = self.geo_dof.get_basis(
-                    etype, "H1", names=["x", "y"], kind="data"
+                    etype, "H1", names=geo_names, kind="data"
                 )
 
                 # Create the quadrature instance
@@ -277,6 +250,9 @@ class Problem:
                     quadrature,
                     self.weakform,
                     etype,
+                    input_names,
+                    data_names,
+                    geo_names,
                 )
 
                 # Get the connectivity
@@ -285,27 +261,31 @@ class Problem:
 
                 # Add the element/component
                 nelems = conn.shape[0]
-                """
-                model.add_component("helmholtz", nelems, helmholtz)
-                """
                 model.add_component(elem_name, nelems, elem)
 
                 # Link all the element dof to the component
-                """
-                model.link("helmholtz.y_coord", "src.y_coord", tgt_indices= self.geo_dof)
-                model.link("helmholtz.x_coord", "src.x_coord", tgt_indices= self.geo_dof)
-                model.link("helmholtz.rho", "src.rho", tgt_indices=self.soln_dof)
-                """
-                self.soln_dof.link_dof(model, "rho", elem_name, conn)
-                self.geo_dof.link_dof(model, "x", elem_name, conn)
-                self.geo_dof.link_dof(model, "y", elem_name, conn)
+                for name in input_names:
+                    self.soln_dof.link_dof(model, name, elem_name, conn)
+
+                for name in geo_names:
+                    self.geo_dof.link_dof(model, name, elem_name, conn)
 
         return model
 
 
 class FiniteElement(am.Component):
     def __init__(
-        self, name, soln_basis, data_basis, geo_basis, quadrature, weakform, etype
+        self,
+        name,
+        soln_basis,
+        data_basis,
+        geo_basis,
+        quadrature,
+        weakform,
+        etype,
+        input_names=[],
+        data_names=[],
+        geo_names=[],
     ):
         super().__init__(name=name)
 
@@ -323,18 +303,18 @@ class FiniteElement(am.Component):
 
         # The x/y coordinates
         if etype == "CPS3":
-            self.add_data("x", shape=(3,))
-            self.add_data("y", shape=(3,))
-
-            # The implicit topology input/output
-            self.add_input("rho", shape=(3,))
+            shape = (3,)
 
         elif etype == "CPS4":
-            self.add_data("x", shape=(4,))
-            self.add_data("y", shape=(4,))
+            shape = (4,)
 
-            # The implicit topology input/output
-            self.add_input("rho", shape=(4,))
+        # Data
+        for name in geo_names:
+            self.add_data(name, shape=shape)
+
+        # Inputs
+        for name in input_names:
+            self.add_input(name, shape=shape)
 
         # Set the arguments to the compute function for each quadrature point
         self.set_args(self.quadrature.get_args())
@@ -366,7 +346,6 @@ class FiniteElement(am.Component):
 
 
 def weakform(soln, data=None, geo=None):
-    print(soln["rho"])
     u = soln["rho"]
     uvalue = u["value"]
     ugrad = u["grad"]
@@ -384,8 +363,6 @@ def weakform(soln, data=None, geo=None):
     # rho = data["rho"]["value"]
 
     f = am.sin(x) ** 2 * am.cos(y) ** 2
-
-    # return 0.5 * (uvalue**2 + basis.dot_product(ugrad, ugrad, n=2) - 2.0 * uvalue * f)
     return 0.5 * (uvalue**2 + basis.dot_product(ugrad, ugrad, n=2) - 2.0 * uvalue * f)
 
 
