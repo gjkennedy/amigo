@@ -122,98 +122,95 @@ class InpParser:
         conn = self.elem_conn[elset][elem_type]
         return np.array([conn[k] for k in sorted(conn.keys())], dtype=int)
 
-#     # Local edge definitions per element type.
-#     # Each entry is a list of (local_node_i, local_node_j) pairs that form
-#     # the edges of that element. Corner nodes only — mid-side nodes are
-#     # included as the third entry where present so the full edge is
-#     # (corner_a, corner_b, optional_midside).
-#     _EDGE_LOCAL = {
-#         # Linear triangle: 3 edges
-#         "CPS3": [(0, 1), (1, 2), (2, 0)],
-#         # Linear quad: 4 edges
-#         "CPS4": [(0, 1), (1, 2), (2, 3), (3, 0)],
-#         # Quadratic triangle: 3 edges, each with a mid-side node
-#         #   0-3-1 / 1-4-2 / 2-5-0
-#         "CPS6": [(0, 1, 3), (1, 2, 4), (2, 0, 5)],
-#         # 9-node quad (serendipity/Lagrange):
-#         #   0-4-1 / 1-5-2 / 2-6-3 / 3-7-0
-#         "M3D9": [(0, 1, 4), (1, 2, 5), (2, 3, 6), (3, 0, 7)],
-#     }
+    # Local edge definitions per element type.
+    # Each entry is a list of (local_node_i, local_node_j) pairs that form
+    # the edges of that element. Corner nodes only — mid-side nodes are
+    # included as the third entry where present so the full edge is
+    # (corner_a, corner_b, optional_midside).
+    _EDGE_LOCAL = {
+        # Linear triangle: 3 edges
+        "CPS3": [(0, 1), (1, 2), (2, 0)],
+        # Linear quad: 4 edges
+        "CPS4": [(0, 1), (1, 2), (2, 3), (3, 0)],
+        # Quadratic triangle: 3 edges, each with a mid-side node
+        #   0-3-1 / 1-4-2 / 2-5-0
+        "CPS6": [(0, 1, 3), (1, 2, 4), (2, 0, 5)],
+        # 9-node quad (serendipity/Lagrange):
+        #   0-4-1 / 1-5-2 / 2-6-3 / 3-7-0
+        "M3D9": [(0, 1, 4), (1, 2, 5), (2, 3, 6), (3, 0, 7)],
+    }
 
-#     def get_conn_edges(self, elset, elem_type):
-#         """
-#         Build a unique-edge connectivity dictionary for the given elset/element type.
+    def get_conn_edges(self, elset, elem_type):
+        """
+        Build a unique-edge connectivity dictionary for the given elset/element type.
 
-#         Returns
-#         -------
-#         edge_dict : dict
-#             Keys are integer edge tags (0, 1, 2, …), one per unique global edge.
-#             Values are tuples of global node indices that make up that edge.
-#             The first two entries are always the corner nodes in ascending order
-#             (lowest index first).  For higher-order elements a third entry
-#             carries the mid-side node, preserving its original orientation so
-#             that the mid-side node is correctly associated with its edge even
-#             after the corners are sorted.
+        Returns
+        -------
+        edge_dict : dict
+            Keys are integer edge tags (0, 1, 2, …), one per unique global edge.
+            Values are tuples of global node indices that make up that edge.
+            The first two entries are always the corner nodes in ascending order
+            (lowest index first).  For higher-order elements a third entry
+            carries the mid-side node, preserving its original orientation so
+            that the mid-side node is correctly associated with its edge even
+            after the corners are sorted.
 
-#         Example (linear triangle mesh with 4 nodes, 2 elements)
-#         -------------------------------------------------------
-#             edge_dict = {
-#                 0: (0, 1),
-#                 1: (1, 2),
-#                 2: (0, 2),
-#                 3: (2, 3),
-#                 4: (1, 3),
-#             }
-#         """
-#         if elem_type not in self._EDGE_LOCAL:
-#             raise NotImplementedError(
-#                 f"Edge connectivity not defined for element type '{elem_type}'. "
-#                 f"Supported types: {list(self._EDGE_LOCAL.keys())}"
-#             )
+        Example (linear triangle mesh with 4 nodes, 2 elements)
+        -------------------------------------------------------
+            edge_dict = {
+                0: (0, 1),
+                1: (1, 2),
+                2: (0, 2),
+                3: (2, 3),
+                4: (1, 3),
+            }
+        """
+        if elem_type not in self._EDGE_LOCAL:
+            raise NotImplementedError(
+                f"Edge connectivity not defined for element type '{elem_type}'. "
+                f"Supported types: {list(self._EDGE_LOCAL.keys())}"
+            )
 
-#         H1_tri_conn = self.get_conn(elset, elem_type)  # shape (nelems, nodes_per_elem)
-#         H1_quad_conn = self.get_conn(elset, elem_type)  # shape (nelems, nodes_per_elem)
+        H1_tri_conn = self.get_conn(elset, elem_type)  # shape (nelems, nodes_per_elem)
+        local_edges = self._EDGE_LOCAL[elem_type]
 
-#         local_edges = self._EDGE_LOCAL[elem_type]
+        seen = {}  # canonical_corner_pair -> edge_tag
+        edge_dict = {}  # edge_tag -> full node tuple (corner0, corner1[, midside])
+        tag = 0
 
-#         seen = {}  # canonical_corner_pair -> edge_tag
-#         edge_dict = {}  # edge_tag -> full node tuple (corner0, corner1[, midside])
-#         tag = 0
+        for elem_nodes in H1_tri_conn:
+            for local_edge in local_edges:
+                # Corner nodes that define uniqueness
+                n0 = int(elem_nodes[local_edge[0]])
+                n1 = int(elem_nodes[local_edge[1]])
 
-#         for elem_nodes in conn:
-#             for local_edge in local_edges:
-#                 # Corner nodes that define uniqueness
-#                 n0 = int(elem_nodes[local_edge[0]])
-#                 n1 = int(elem_nodes[local_edge[1]])
+                # Canonical key: lowest node index first
+                key = (min(n0, n1), max(n0, n1))
 
-#                 # Canonical key: lowest node index first
-#                 key = (min(n0, n1), max(n0, n1))
+                if key not in seen:
+                    seen[key] = tag
 
-#                 if key not in seen:
-#                     seen[key] = tag
+                    # Build the full tuple: sorted corners + optional mid-side
+                    if len(local_edge) == 3:
+                        mid = int(elem_nodes[local_edge[2]])
+                        # Mid-side node follows the corner ordering
+                        full = (
+                            (key[0], key[1], mid) if n0 < n1 else (key[0], key[1], mid)
+                        )
+                        edge_dict[tag] = full
+                    else:
+                        edge_dict[tag] = key
 
-#                     # Build the full tuple: sorted corners + optional mid-side
-#                     if len(local_edge) == 3:
-#                         mid = int(elem_nodes[local_edge[2]])
-#                         # Mid-side node follows the corner ordering
-#                         full = (
-#                             (key[0], key[1], mid) if n0 < n1 else (key[0], key[1], mid)
-#                         )
-#                         edge_dict[tag] = full
-#                     else:
-#                         edge_dict[tag] = key
+                    tag += 1
 
-#                     tag += 1
+        return edge_dict
 
-#         return edge_dict
-
-
-# fname = "plate.inp"
-# parser = InpParser()
-# parser.parse_inp(fname)
-# X = parser.get_nodes()
-# elem_conn = parser.get_conn("SURFACE1", "CPS3")
-# edge_conn = parser.get_conn_edges("SURFACE1", "CPS3")
-# plot_mesh(X, elem_conn, edge_conn, "mesh_with_edges")
-# plt.savefig("edge_connec.jpg", dpi=800)
-# # plt.show()
+if __name__ == "__main__":
+    fname = "plate.inp"
+    parser = InpParser()
+    parser.parse_inp(fname)
+    X = parser.get_nodes()
+    elem_conn = parser.get_conn("SURFACE1", "CPS3")
+    edge_conn = parser.get_conn_edges("SURFACE1", "CPS3")
+    plot_mesh(X, elem_conn, edge_conn, "mesh_with_edges")
+    plt.show()
