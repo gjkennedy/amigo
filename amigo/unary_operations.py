@@ -17,10 +17,6 @@ def sin(expr):
     return Expr(UnaryNode("sin", expr))
 
 
-def sqrt(expr):
-    return Expr(UnaryNode("sqrt", expr))
-
-
 def asin(expr):
     return Expr(UnaryNode("asin", expr))
 

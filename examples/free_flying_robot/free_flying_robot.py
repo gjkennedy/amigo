@@ -227,76 +227,97 @@ class FinalConditions(am.Component):
 def plot_results(t, q, u):
     """Plot the optimization results"""
 
-    with plt.style.context(niceplots.get_style()):
-        fig, axes = plt.subplots(4, 3, figsize=(15, 16))
+    # Colors matching tutorial style
+    blue_color = "#0072BD"
+    purple_color = "#8242A2"
 
-        # State variables - position
-        axes[0, 0].plot(t, q[:, 0])
-        axes[0, 0].set_ylabel("x (position)")
-        axes[0, 0].set_xlabel("Time (s)")
-        axes[0, 0].grid(True)
+    fig, axes = plt.subplots(3, 3, figsize=(15, 9))
+    fontname = "Arial"
 
-        axes[0, 1].plot(t, q[:, 1])
-        axes[0, 1].set_ylabel("y (position)")
-        axes[0, 1].set_xlabel("Time (s)")
-        axes[0, 1].grid(True)
+    # Compute net thrusts
+    T1 = u[:, 0] - u[:, 1]
+    T2 = u[:, 2] - u[:, 3]
 
-        axes[0, 2].plot(t, q[:, 2])
-        axes[0, 2].set_ylabel("θ (angle, rad)")
-        axes[0, 2].set_xlabel("Time (s)")
-        axes[0, 2].grid(True)
+    # Row 1: Position states
+    axes[0, 0].plot(t, q[:, 0], color=blue_color, linewidth=2.0)
+    axes[0, 0].set_xlabel("Time (s)", fontsize=11)
+    axes[0, 0].set_ylabel("x (m)", fontsize=12)
+    axes[0, 0].grid(True, alpha=0.25, linewidth=0.5)
+    axes[0, 0].tick_params(labelsize=10)
+    axes[0, 0].set_title("Horizontal Position", fontsize=14, fontweight="bold", pad=10)
 
-        # State variables - velocity
-        axes[1, 0].plot(t, q[:, 3])
-        axes[1, 0].set_ylabel("vx (velocity x)")
-        axes[1, 0].set_xlabel("Time (s)")
-        axes[1, 0].grid(True)
+    axes[0, 1].plot(t, q[:, 1], color=blue_color, linewidth=2.0)
+    axes[0, 1].set_xlabel("Time (s)", fontsize=11)
+    axes[0, 1].set_ylabel("y (m)", fontsize=12)
+    axes[0, 1].grid(True, alpha=0.25, linewidth=0.5)
+    axes[0, 1].tick_params(labelsize=10)
+    axes[0, 1].set_title("Vertical Position", fontsize=14, fontweight="bold", pad=10)
 
-        axes[1, 1].plot(t, q[:, 4])
-        axes[1, 1].set_ylabel("vy (velocity y)")
-        axes[1, 1].set_xlabel("Time (s)")
-        axes[1, 1].grid(True)
+    axes[0, 2].plot(t, q[:, 2], color=blue_color, linewidth=2.0)
+    axes[0, 2].set_xlabel("Time (s)", fontsize=11)
+    axes[0, 2].set_ylabel("θ (rad)", fontsize=12)
+    axes[0, 2].grid(True, alpha=0.25, linewidth=0.5)
+    axes[0, 2].tick_params(labelsize=10)
+    axes[0, 2].set_title("Orientation", fontsize=14, fontweight="bold", pad=10)
 
-        axes[1, 2].plot(t, q[:, 5])
-        axes[1, 2].set_ylabel("ω (angular velocity)")
-        axes[1, 2].set_xlabel("Time (s)")
-        axes[1, 2].grid(True)
+    # Row 2: Velocity states
+    axes[1, 0].plot(t, q[:, 3], color=blue_color, linewidth=2.0)
+    axes[1, 0].set_xlabel("Time (s)", fontsize=11)
+    axes[1, 0].set_ylabel("vx (m/s)", fontsize=12)
+    axes[1, 0].grid(True, alpha=0.25, linewidth=0.5)
+    axes[1, 0].tick_params(labelsize=10)
+    axes[1, 0].set_title("Horizontal Velocity", fontsize=14, fontweight="bold", pad=10)
 
-        # Individual control variables
-        axes[2, 0].plot(t, u[:, 0])
-        axes[2, 0].set_ylabel("u1")
-        axes[2, 0].set_xlabel("Time (s)")
-        axes[2, 0].grid(True)
+    axes[1, 1].plot(t, q[:, 4], color=blue_color, linewidth=2.0)
+    axes[1, 1].set_xlabel("Time (s)", fontsize=11)
+    axes[1, 1].set_ylabel("vy (m/s)", fontsize=12)
+    axes[1, 1].grid(True, alpha=0.25, linewidth=0.5)
+    axes[1, 1].tick_params(labelsize=10)
+    axes[1, 1].set_title("Vertical Velocity", fontsize=14, fontweight="bold", pad=10)
 
-        axes[2, 1].plot(t, u[:, 1])
-        axes[2, 1].set_ylabel("u2")
-        axes[2, 1].set_xlabel("Time (s)")
-        axes[2, 1].grid(True)
+    axes[1, 2].plot(t, q[:, 5], color=blue_color, linewidth=2.0)
+    axes[1, 2].set_xlabel("Time (s)", fontsize=11)
+    axes[1, 2].set_ylabel("ω (rad/s)", fontsize=12)
+    axes[1, 2].grid(True, alpha=0.25, linewidth=0.5)
+    axes[1, 2].tick_params(labelsize=10)
+    axes[1, 2].set_title("Angular Velocity", fontsize=14, fontweight="bold", pad=10)
 
-        axes[2, 2].plot(t, u[:, 2])
-        axes[2, 2].set_ylabel("u3")
-        axes[2, 2].set_xlabel("Time (s)")
-        axes[2, 2].grid(True)
+    # Row 3: Trajectory and Controls
+    axes[2, 0].plot(q[:, 0], q[:, 1], color=blue_color, linewidth=2.0)
+    axes[2, 0].set_xlabel("x (m)", fontsize=11)
+    axes[2, 0].set_ylabel("y (m)", fontsize=12)
+    axes[2, 0].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 0].tick_params(labelsize=10)
+    axes[2, 0].set_title("Trajectory", fontsize=14, fontweight="bold", pad=10)
+    axes[2, 0].axis('equal')
 
-        # u4 and net thrusts
-        axes[3, 0].plot(t, u[:, 3])
-        axes[3, 0].set_ylabel("u4")
-        axes[3, 0].set_xlabel("Time (s)")
-        axes[3, 0].grid(True)
+    axes[2, 1].plot(t, T1, color=purple_color, linewidth=2.0)
+    axes[2, 1].set_xlabel("Time (s)", fontsize=11)
+    axes[2, 1].set_ylabel("T1 (N)", fontsize=12)
+    axes[2, 1].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 1].tick_params(labelsize=10)
+    axes[2, 1].set_title("Thruster 1", fontsize=14, fontweight="bold", pad=10)
 
-        axes[3, 1].plot(t, u[:, 0] - u[:, 1])
-        axes[3, 1].set_ylabel("T1 = u1 - u2")
-        axes[3, 1].set_xlabel("Time (s)")
-        axes[3, 1].grid(True)
+    axes[2, 2].plot(t, T2, color=purple_color, linewidth=2.0)
+    axes[2, 2].set_xlabel("Time (s)", fontsize=11)
+    axes[2, 2].set_ylabel("T2 (N)", fontsize=12)
+    axes[2, 2].grid(True, alpha=0.25, linewidth=0.5)
+    axes[2, 2].tick_params(labelsize=10)
+    axes[2, 2].set_title("Thruster 2", fontsize=14, fontweight="bold", pad=10)
 
-        axes[3, 2].plot(t, u[:, 2] - u[:, 3])
-        axes[3, 2].set_ylabel("T2 = u3 - u4")
-        axes[3, 2].set_xlabel("Time (s)")
-        axes[3, 2].grid(True)
+    # Set font for all axes
+    for ax_row in axes:
+        for ax in ax_row:
+            ax.xaxis.label.set_fontname(fontname)
+            ax.yaxis.label.set_fontname(fontname)
+            for tick in ax.get_xticklabels():
+                tick.set_fontname(fontname)
+            for tick in ax.get_yticklabels():
+                tick.set_fontname(fontname)
 
-        plt.tight_layout()
-        plt.savefig("freeflyingrobot_results.png", dpi=300, bbox_inches="tight")
-        plt.show()
+    plt.tight_layout()
+    plt.savefig("freeflyingrobot_results.png", dpi=300, bbox_inches="tight", facecolor="white")
+    plt.show()
 
 
 def plot_convergence(nrms):
