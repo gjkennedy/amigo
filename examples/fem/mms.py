@@ -27,7 +27,7 @@ def output(soln, data=None, geo=None):
     pi = np.pi
     integrand = am.sin(2 * pi * x) * am.cos(2 * pi * y)
     # return {"integrand": integrand}
-    return integrand
+    return {"torque": uvalue}
 
 
 def weakform(soln, data=None, geo=None):
@@ -113,17 +113,9 @@ for i, lc in enumerate(lc_vals):
     wf_mesh_map = {
         "Mesh": weakform_map,
     }
+
     output_map = {
-        "Mesh": {
-            "integrand": {
-                "target": ["SURFACE1"],
-                "output_func": output,
-            },
-            "torque": {
-                "target": ["SURFACE1"],
-                "function": output,
-            },
-        }
+        "integral": {"names": ["torque"], "target": ["SURFACE1"], "function": output},
     }
 
     # Initialize the spaces (same for all domains)
@@ -149,6 +141,7 @@ for i, lc in enumerate(lc_vals):
             geo_space,
             weakform_map=wf_mesh_map[mesh_name],
             dirichlet_bc_map=dirichlet_bc_meshes[mesh_name],
+            output_map=output_map,
         )
         model = problem.create_model(mesh_name)
         global_model.add_model(mesh_name, model)
@@ -177,6 +170,11 @@ for i, lc in enumerate(lc_vals):
     ans_local = ans
     u = ans_local.get_array()[global_model.get_indices("Mesh.src_soln.u")]
     u_exact = exact(x=mesh.X[:, 0], y=mesh.X[:, 1])
+
+    output = global_model.create_output_vector()
+    p.compute_output(ans, output.get_vector())
+
+    print("The torque is: ", output["Mesh.outputs.torque[0]"])
 
     mesh.plot(u)
 

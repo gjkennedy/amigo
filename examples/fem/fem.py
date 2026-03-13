@@ -10,7 +10,7 @@ from matplotlib.collections import PolyCollection
 
 
 class DofSource(am.Component):
-    def __init__(self, input_names=[], data_names=[], con_names=[]):
+    def __init__(self, input_names=[], data_names=[], con_names=[], output_names=[]):
         super().__init__()
 
         # Geo and data added as data to the component
@@ -22,6 +22,8 @@ class DofSource(am.Component):
             self.add_input(name)
         for name in con_names:
             self.add_constraint(name)
+        for name in output_names:
+            self.add_output(name)
 
         return
 
@@ -486,10 +488,6 @@ class Problem:
             self.sym_bc_map,
         )
 
-        # self.output_dof = DegreesOfFreedom(
-        # kind="output", ndof=len(self.output_map.keys())
-        # )
-
         return
 
     def create_model(self, module_name: str):
@@ -499,7 +497,6 @@ class Problem:
         self.soln_dof.add_source(model)
         self.data_dof.add_source(model)
         self.geo_dof.add_source(model)
-        # self.output_dof.add_source(model)
 
         # Get the domain names from the mesh
         domains = self.mesh.get_domains()
@@ -564,11 +561,21 @@ class Problem:
         self.sym_bc_dof.add_bc_source(model)
         self.sym_bc_dof.link_bc_dof(model)
 
+        # Make a list of all of the outputs
+        all_outputs = []
+        for out_name in self.output_map:
+            for name in self.output_map[out_name]["names"]:
+                if not (name in all_outputs):
+                    all_outputs.append(name)
+
+        # Add the outputs component
+        model.add_component("outputs", 1, DofSource(output_names=all_outputs))
+
+        # Create the output objects
         output_objs = {}
         for out_name in self.output_map:
             targets = self.output_map[out_name]["target"]
-            # output_names = self.output_map[out_name]["names"]
-            output_names = []
+            output_names = self.output_map[out_name]["names"]
             output_func = self.output_map[out_name]["function"]
 
             # Figure out the element types we need
@@ -614,12 +621,16 @@ class Problem:
 
                     # Add the element/component
                     nelems = self.mesh.get_num_elements(target, etype)
-                    model.add_component(comp_name, nelems, elem)
+                    model.add_component(comp_name, nelems, obj)
 
                     # Link all the element dof to the component
                     self.soln_dof.link_dof(model, target, etype, comp_name)
                     self.data_dof.link_dof(model, target, etype, comp_name)
                     self.geo_dof.link_dof(model, target, etype, comp_name)
+
+                    # Link the outputs
+                    for name in output_names:
+                        model.link(f"{comp_name}.{name}", f"outputs.{name}[0]")
 
         # Link the output to the finite element class
         return model
@@ -685,6 +696,7 @@ class FiniteElementOutput(am.Component):
         data_basis,
         geo_basis,
         quadrature,
+        output_names,
         output_function,
     ):
         super().__init__(name=name)
@@ -693,6 +705,7 @@ class FiniteElementOutput(am.Component):
         self.data_basis = data_basis
         self.geo_basis = geo_basis
         self.quadrature = quadrature
+        self.output_names = output_names
         self.output_function = output_function
 
         # From BasisCollection
@@ -700,9 +713,9 @@ class FiniteElementOutput(am.Component):
         self.geo_basis.add_declarations(self)
         self.data_basis.add_declarations(self)
 
-        # add the output declarations
+        # add the output declarations, assuming scalar functions
         for name in self.output_names:
-            self.add_output(name)  # assumes scalar
+            self.add_output(name)
 
         # Set the arguments to the compute function for each quadrature point
         self.set_args(self.quadrature.get_args())
