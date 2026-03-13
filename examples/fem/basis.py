@@ -21,6 +21,35 @@ def mat_vec_transpose(A, x, m=1, n=1):
     return [A[0][0] * x[0] + A[1][0] * x[1], A[0][1] * x[0] + A[1][1] * x[1]]
 
 
+def eval_1d_monomials(p, xi):
+    pows = np.ones(p + 1)
+    for i in range(1, p + 1):
+        pows[i] = pows[i - 1] * xi
+    return pows
+
+
+def eval_1d_monomial_grad(p, xi):
+    pows = np.ones(p + 1)
+    for i in range(1, p + 1):
+        pows[i] = pows[i - 1] * xi
+
+    grad = np.zeros(p + 1)
+    for i in range(1, p + 1):
+        grad[i] = i * pows[i - 1]
+    return grad
+
+
+def build_1d_lagrange_vandermonde(p, pts):
+    n = p + 1
+    V = np.zeros((n, n), dtype=float)
+    for a, xi in enumerate(pts):
+        V[a, :] = eval_1d_monomials(p, xi)
+
+    # Compute C = V^{-1}
+    I = np.eye(n, dtype=float)
+    return np.linalg.solve(V, I)
+
+
 def eval_2d_monomials(p, xi, eta, exps):
     """out[k] = xi^i * eta^j for each (i,j)."""
     xi_pows = np.ones(p + 1)
@@ -143,6 +172,50 @@ class ConstantBasis(Basis):
         return soln
 
 
+class LagrangeBasis1D(Basis):
+    def __init__(self, names, p=1, kind="input"):
+        self.p = p
+        nnodes = p + 1
+        super().__init__(names, nnodes=nnodes, kind=kind)
+
+        self.pts = np.linspace(-1, 1, nnodes)
+        self.C = build_1d_lagrange_vandermonde(self.p, self.pts)
+
+    def transform(self, detJ, Jinv, orig):
+        soln = {}
+        for name in orig:
+            value = orig[name]["value"]
+            grad = orig[name]["grad"]
+            soln[name] = {
+                "value": value,
+                "grad": mat_vec_transpose(Jinv, grad, n=2, m=2),
+            }
+        return soln
+
+    def eval(self, comp, pt):
+        xi = pt[0]
+
+        # Evaluate the monomials
+        m = eval_1d_monomials(self.p, xi)
+        N = m @ self.C
+
+        mgrad = eval_1d_monomial_grad(self.p, xi)
+        Nx = mgrad @ self.C
+        soln = {}
+        for name in self.names:
+            if self.kind == "input":
+                u = comp.inputs[name]
+            elif self.kind == "data":
+                u = comp.data[name]
+
+            soln[name] = {
+                "value": dot_product(u, N, n=self.nnodes),
+                "grad": [dot_product(u, Nx, n=self.nnodes)],
+            }
+
+        return soln
+
+
 class LagrangeBasis2D(Basis):
     def __init__(self, names, nnodes=1, kind="input"):
         super().__init__(names, nnodes=nnodes, kind=kind)
@@ -167,7 +240,8 @@ class LagrangeBasis2D(Basis):
         y_xi, y_eta = geo["y"]["grad"]
 
         detJ = x_xi * y_eta - x_eta * y_xi
-        Jinv = [[y_eta / detJ, -x_eta / detJ], [-y_xi / detJ, x_xi / detJ]]
+        inv = 1.0 / detJ
+        Jinv = [[y_eta * inv, -x_eta * inv], [-y_xi * inv, x_xi * inv]]
 
         return detJ, Jinv
 
