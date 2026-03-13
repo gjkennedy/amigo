@@ -569,13 +569,13 @@ class Problem:
 
                     print(self.output_map[output_name][domain])
                     elem = FiniteElementOutput(
-                        elem_name,=
+                        elem_name,
                         soln_basis,
                         data_basis,
                         geo_basis,
                         quadrature,
                         output_name,
-                        self.output_map
+                        self.output_map,
                         # self.output_map["name"],
                         # self.output_map[output_domain_name],
                     )
