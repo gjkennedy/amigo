@@ -173,7 +173,7 @@ class ConstantBasis(Basis):
 
 
 class LagrangeBasis1D(Basis):
-    def __init__(self, names, p=1, kind="input"):
+    def __init__(self, p, names, kind="input"):
         self.p = p
         nnodes = p + 1
         super().__init__(names, nnodes=nnodes, kind=kind)
@@ -493,6 +493,19 @@ class QuadQuadrature(Quadrature):
         wt = self.weights[n] * self.weights[m]
         pt = [self.points[n], self.points[m]]
         return wt, pt
+    
+class LineQuadrature(Quadrature):
+    def __init__(self, npts):
+        pts, wts = np.polynomial.legendre.leggauss(npts)
+        self.xi      = pts
+        self.weights = wts
+        self.args    = [{"n": n} for n in range(npts)]
+
+    def get_args(self):
+        return self.args
+
+    def get_point(self, n=0):
+        return self.weights[n], [self.xi[n]]
 
 
 class SolutionSpace:

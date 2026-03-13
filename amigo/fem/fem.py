@@ -280,7 +280,10 @@ class DegreesOfFreedom:
         elif etype == "M3D9":
             if space == "H1":
                 return basis.QuadLagrangeBasis(2, names, kind=kind)
-
+        elif etype == "T3D2":
+            if space == "H1":
+                return basis.LagrangeBasis1D(1, names, kind=kind)
+        
         raise NotImplementedError(
             f"Basis for element {etype} with space {space} not implemented"
         )
@@ -294,6 +297,8 @@ class DegreesOfFreedom:
             return basis.TriangleQuadrature(4)
         elif etype == "M3D9":
             return basis.QuadQuadrature(3)
+        elif etype == "T3D2":
+            return basis.LineQuadrature(2)
 
         raise NotImplementedError(f"Quadrature for element {etype} not implemented")
 
@@ -311,7 +316,7 @@ class Mesh:
     def get_domains(self):
         domains = self.parser.get_domains()
 
-        element_types = ["CPS3", "CPS4", "CPS6", "M3D9"]
+        element_types = ["CPS3", "CPS4", "CPS6", "M3D9", "T3D2"]
 
         volumes = {}
         for name in domains:
@@ -368,6 +373,9 @@ class Mesh:
 
         for name in volumes:
             for etype in volumes[name]:
+                if etype == "T3D2":
+                    ''' do not attempt to plot when line element found'''
+                    continue
                 # Get the connectivity
                 conn = self.convert_conn(etype, self.get_conn(name, etype))
                 tri = mtri.Triangulation(x, y, conn)
