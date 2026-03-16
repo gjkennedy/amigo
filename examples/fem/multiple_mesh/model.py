@@ -1,17 +1,38 @@
 import numpy as np
-from fem import (
-    Mesh,
-    weakform_air,
-    weakform_coils,
-    weakform_NS_Magnet,
-    weakform_SN_Magnet,
-    Problem,
-)
-import basis
+from amigo.fem import dot_product, Problem, Mesh, basis
 import amigo as am
 from scipy.sparse.linalg import spsolve
 import matplotlib.pyplot as plt
+import argparse
 
+
+def weakform1(soln, data=None, geo=None):
+    u = soln["u"]
+    uvalue = u["value"]
+    ugrad = u["grad"]
+    wf = 0.5 * dot_product(ugrad, ugrad, n=2)
+    return wf
+
+
+def weakform2(soln, data=None, geo=None):
+    u = soln["u"]
+    uvalue = u["value"]
+    ugrad = u["grad"]
+
+    x = geo["x"]["value"]
+    y = geo["y"]["value"]
+
+    f = data["Jz"]["value"]
+    wf = 0.5 * dot_product(ugrad, ugrad, n=2) + f * uvalue
+    return wf
+
+
+# Set arguments
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--build", dest="build", action="store_true", default=False, help="Enable building"
+)
+args = parser.parse_args()
 
 # Define mesh objects
 meshes = {
@@ -68,12 +89,12 @@ symm_bc_meshes = {
 # Weak form mapping for each mesh
 weakform_map = {
     "Mesh0": {
-        "air": {"target": ["SURFACE1"], "weakform": weakform_air},
-        "coil": {"target": ["SURFACE2", "SURFACE3"], "weakform": weakform_coils},
+        "air": {"target": ["SURFACE1"], "weakform": weakform1},
+        "coil": {"target": ["SURFACE2", "SURFACE3"], "weakform": weakform2},
     },
     "Mesh1": {
-        "air": {"target": ["SURFACE1"], "weakform": weakform_air},
-        "coil": {"target": ["SURFACE2", "SURFACE3"], "weakform": weakform_coils},
+        "air": {"target": ["SURFACE1"], "weakform": weakform1},
+        "coil": {"target": ["SURFACE2", "SURFACE3"], "weakform": weakform2},
     },
 }
 
@@ -113,7 +134,6 @@ npts_shared = 20
 slide_number = 0
 x_offset = slide_number * (5.0 / npts_shared)
 
-
 # Add continuity BCs to the global model
 nodes_line_1_shared = nodes_line_1[slide_number:]
 nodes_line_3_shared = (
@@ -138,7 +158,9 @@ for i in range(len(nodes_line_1_hanging)):
 
 
 # Build the model
-main.build_module()
+if args.build:
+    main.build_module()
+
 main.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
 p = main.get_problem()
 
@@ -151,11 +173,11 @@ data["Mesh1.src_geo.x"] = mesh1.X[:, 0]
 data["Mesh1.src_geo.y"] = mesh1.X[:, 1]
 
 data["Mesh0.src_data.Jz[0]"] = 0.0  # SURFACE1
-data["Mesh0.src_data.Jz[1]"] = 0.0  # SURFACE2
-data["Mesh0.src_data.Jz[2]"] = 0.0  # SURFACE3
+data["Mesh0.src_data.Jz[1]"] = 10.0  # SURFACE2
+data["Mesh0.src_data.Jz[2]"] = 10.0  # SURFACE3
 
 data["Mesh1.src_data.Jz[0]"] = 0.0  # SURFACE1
-data["Mesh1.src_data.Jz[1]"] = 0.0  # SURFACE2
+data["Mesh1.src_data.Jz[1]"] = 10.0  # SURFACE2
 data["Mesh1.src_data.Jz[2]"] = 10.0  # SURFACE3
 
 mat = p.create_matrix()
@@ -175,8 +197,8 @@ u_domain1 = ans_local.get_array()[main.get_indices("Mesh1.src_soln.u")]
 
 max_domain = np.max(np.maximum(u_domain0, u_domain1))
 min_domain = np.min(np.minimum(u_domain0, u_domain1))
-print(max_domain, min_domain)
 
+# Plot solution field
 fig, ax = plt.subplots()
 mesh.plot(
     u_domain0,
@@ -195,14 +217,3 @@ mesh.plot(
     min_level=min_domain,
 )
 plt.show()
-
-# x = problem.create_vector()
-# mat = problem.create_matrix()
-# rhs = model.create_vector()
-# problem.gradient(1.0, x, rhs.get_vector())
-# problem.hessian(1.0, x, mat)
-
-# chol = am.SparseCholesky(mat)
-# flag = chol.factor()
-# print("flag = ", flag)
-# chol.solve(rhs.get_vector())

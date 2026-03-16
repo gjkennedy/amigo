@@ -1,12 +1,9 @@
-from amigo.fem import Mesh, Problem, SolutionSpace, InpParser
+from amigo.fem import Mesh, Problem, SolutionSpace
 import amigo as am
 from scipy.sparse.linalg import spsolve
 import matplotlib.pyplot as plt
 import numpy as np
 import argparse
-from pathlib import Path
-import matplotlib.tri as mtri
-from matplotlib.collections import PolyCollection
 
 
 def weakform_plane_stress(soln, data=None, geo=None):
@@ -103,9 +100,9 @@ problem = Problem(
 
 model = problem.create_model("plane_stress")
 
-model.build_module()
-source_dir = Path(__file__).resolve().parent
-model.build_module(source_dir=source_dir)
+if args.build:
+    model.build_module()
+
 model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
 p = model.get_problem()
 

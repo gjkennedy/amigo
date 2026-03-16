@@ -10,7 +10,7 @@ gmsh.initialize()
 gmsh.model.add("plate")
 
 # Mesh refinement
-lc = 0.1
+lc = 1e-2
 
 # Geometry definition
 L = 1.0  # plate size
@@ -35,18 +35,10 @@ gmsh.model.geo.addPlaneSurface([1], 1)
 
 gmsh.model.geo.synchronize()
 
-# Generate a 2D mesh
-# gmsh.model.mesh.setRecombine(2, 1)
-
 gmsh.model.mesh.generate(2)
-# gmsh.model.mesh.setOrder(order)  # set the order
 
-# Save the mesh
 gmsh.write("plate.inp")
 
-# To visualize the model we can run the graphical user interface with
-# `gmsh.fltk.run()'. Here we run it only if "-nopopup" is not provided in the
-# command line arguments:
 if "-nopopup" not in sys.argv:
     gmsh.fltk.run()
 gmsh.finalize()
