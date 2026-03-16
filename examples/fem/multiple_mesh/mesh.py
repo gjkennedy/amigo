@@ -30,7 +30,7 @@ def check_areas(X, conn):
 
 
 gmsh.initialize()
-gmsh.model.add("multiple_weakform_test")
+gmsh.model.add("multidomain")
 lc = 4e-1
 lc1 = 4e-2
 
@@ -123,7 +123,7 @@ gmsh.model.mesh.generate(2)
 gmsh.model.mesh.setOrder(order)  # set the order
 
 # Save the mesh
-gmsh.write(f"weakform_test_mesh.inp")
+gmsh.write(f"multidomain.inp")
 
 if "-nopopup" not in sys.argv:
     gmsh.fltk.run()

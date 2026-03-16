@@ -36,8 +36,8 @@ args = parser.parse_args()
 
 # Define mesh objects
 meshes = {
-    "Mesh0": Mesh("weakform_test_mesh.inp"),
-    "Mesh1": Mesh("weakform_test_mesh.inp"),
+    "Mesh0": Mesh("multidomain.inp"),
+    "Mesh1": Mesh("multidomain.inp"),
 }
 
 # Define Dirichlet BCs for each mesh
