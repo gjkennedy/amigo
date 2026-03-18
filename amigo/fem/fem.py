@@ -128,20 +128,23 @@ class SymmetryDegreesOfFreedom:
 
 
 class DirichletBCSource(am.Component):
-    def __init__(self, input_name=[]):
-        super().__init__()
+    def __init__(self, name, input_names=[]):
+        super().__init__(name=name)
 
-        self.input_name = input_name
+        self.input_names = input_names
 
-        for name in self.input_name:
-            self.add_input(f"{name}0", value=1.0)
-        self.add_input("lam", value=1.0)
+        for name in self.input_names:
+            self.add_input(f"{name}")
+            self.add_input(f"lam_{name}")
+
         self.add_objective("obj")
         return
 
     def compute(self):
-        for name in self.input_name:
-            self.objective["obj"] = self.inputs[f"{name}0"] * self.inputs["lam"]
+        obj = 0.0
+        for name in self.input_names:
+            obj += self.inputs[f"{name}"] * self.inputs[f"lam_{name}"]
+        self.objective["obj"] = obj
         return
 
 
@@ -173,7 +176,7 @@ class DirichletDegreesOfFreedom:
         nodes = self._get_bc_nodes(targets, start, end)
 
         input_names = self.bc["input"]
-        bc_src = DirichletBCSource(input_name=input_names)
+        bc_src = DirichletBCSource(self.bc_name, input_names=input_names)
 
         if len(nodes) > 0:
             model.add_component(
@@ -181,11 +184,11 @@ class DirichletDegreesOfFreedom:
                 len(nodes),
                 bc_src,
             )
-            for name in input_names:
 
+            for name in input_names:
                 model.link(
                     f"src_soln.{name}",
-                    f"src_{self.bc_name}.{name}0",
+                    f"src_{self.bc_name}.{name}",
                     src_indices=nodes,
                 )
 
@@ -655,7 +658,7 @@ class Problem:
 
                 # quadrature = self.soln_dof.get_quadrature(etype)
                 # # Create the quadrature instance
-                if weakform_name == "bending_potential":
+                if weakform_name == "shear_potential":
                     quadrature = basis.ReducedQuadQuadrature()
                 else:
                     quadrature = self.soln_dof.get_quadrature(etype)

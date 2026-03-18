@@ -7,12 +7,13 @@ import argparse
 
 E = 1.0  # Young's modulus
 nu = 0.3  # Poisson's ratio
-t = 0.1  # Plate thickness
+t = 0.005  # Plate thickness
 k_s = 5.0 / 6.0  # Shear correction factor
 D = E * t**3 / (12.0 * (1.0 - nu**2))  # Bending stiffness
 G = E / (2.0 * (1.0 + nu))  # Shear stiffness  (= k_s * G * t)
 A44 = k_s * G * t
 A55 = A44
+q0 = 1  # N/m^2, load intensity
 
 
 def potential_bending(soln, data=None, geo=None):
@@ -31,8 +32,10 @@ def potential_bending(soln, data=None, geo=None):
     k3 = tx_grad[1] + ty_grad[0]
 
     # bending strain energy
-    U_b = 0.5 * (k2 * (k1 * nu + k2) + k1 * (k1 + k2 * nu) + 1 / 2 * k3**2 * (1 - nu))
-    Work_ext = -1 * w_val
+    U_b = (
+        0.5 * D * (k2 * (k1 * nu + k2) + k1 * (k1 + k2 * nu) + 1 / 2 * k3**2 * (1 - nu))
+    )
+    Work_ext = -q0 * w_val
 
     return U_b - Work_ext
 
@@ -52,19 +55,6 @@ def potential_shear(soln, data=None, geo=None):
     return U_s
 
 
-# def weakform_traction(soln, data=None, geo=None):
-#     """External Work Line integral integrand"""
-#     ux = soln["ux"]["value"]
-#     uy = soln["uy"]["value"]
-#     # traction force for element
-#     # W = uT t
-#     tx = 0
-#     ty = -1
-
-#     W = ux * tx + uy * ty
-#     return W
-
-
 # Two displacement DOFs per node
 soln_space = SolutionSpace({"w": "H1", "tx": "H1", "ty": "H1"})
 geo_space = SolutionSpace({"x": "H1", "y": "H1"})
@@ -79,28 +69,14 @@ weakform_map = {
         "target": ["SURFACE1"],
         "weakform": potential_shear,
     },
-    # "traction": {
-    #     "target": ["LINE2"],
-    #     "weakform": weakform_traction,
-    # },
 }
 
-# dirichlet_bc_map = {
-#     "clamp_w": {
-#         "type": "dirichlet",
-#         "target": ["LINE1", "LINE2", "LINE3", "LINE4"],  # left edge — fix ux
-#         "input": ["w"],
-#         "start": True,
-#         "end": True,
-#     },
-# }
 
 bc_map = {
     "clamp_w": {
         "type": "dirichlet",
-        "input": ["u", "tx", "ty"],
+        "input": ["w", "tx", "ty"],
         "target": ["LINE1", "LINE2", "LINE3", "LINE4"],  # left edge — fix ux
-        "input": ["w"],
         "start": True,
         "end": True,
     },
