@@ -176,12 +176,12 @@ class DirichletDegreesOfFreedom:
         bc_src = DirichletBCSource(input_name=input_names)
 
         if len(nodes) > 0:
+            model.add_component(
+                f"src_{self.bc_name}",
+                len(nodes),
+                bc_src,
+            )
             for name in input_names:
-                model.add_component(
-                    f"src_{self.bc_name}",
-                    len(nodes),
-                    bc_src,
-                )
 
                 model.link(
                     f"src_soln.{name}",
