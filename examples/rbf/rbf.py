@@ -5,13 +5,17 @@ from scipy.sparse.linalg import spsolve
 import matplotlib.pylab as plt
 
 
+def func(x, y):
+    return np.cos(2 * np.pi * x) * np.sin(2 * np.pi * y)
+
+
 num_points = 100 * 100
 output_name = "CD"
 input_names = ["alpha", "Mach"]
 theta = np.array([2.0, 2.0])
 
 xt = np.random.uniform(size=(50, 2))
-yt = np.cos(2 * np.pi * xt[:, 0]) * np.sin(2 * np.pi * xt[:, 1])
+yt = func(xt[:, 0], xt[:, 1])
 
 rbf = RBF(num_points, output_name, input_names, xt, yt, theta)
 model = rbf.create_model("rbf")
@@ -49,6 +53,7 @@ x.get_array()[dof] -= spsolve(K0, g.get_array()[con])
 
 ans = xm["src.CD"].reshape((100, 100))
 
-plt.figure()
-plt.contourf(X, Y, ans)
+fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+ax[0].contourf(X, Y, ans)
+ax[1].contourf(X, Y, func(X, Y))
 plt.show()
