@@ -5,7 +5,6 @@ from typing import List
 
 class RBFSource(am.Component):
     def __init__(self, input_names, output_name):
-        """Create a source model"""
         super().__init__()
 
         for name in input_names:
@@ -77,12 +76,23 @@ class RBF:
     """
     Perform RBF interpolation.
 
+    The RBF class computes constraints to enforce the following:
+
     for i in range(num_points):
-        output_name[i] = weights[j] * exp(- theta[k] * (input[i, k] - base[j, k])**2)
+        output_name[i] = weights[j] * exp(- theta[k]**2 * (input[i, k] - base[j, k])**2)
+
+    where weights are computed by interpolating the training data pair (xt, yt) with the
+    given values of theta.
     """
 
     def __init__(
-        self, num_points, output_name: str, input_names: List[str], xt, yt, theta
+        self,
+        num_points,
+        input_names: List[str],
+        output_name: str,
+        xt: np.ndarray,
+        yt: np.ndarray,
+        theta: List | np.ndarray,
     ):
         num_basis = len(yt)
         if xt.shape[0] != num_basis:
@@ -190,23 +200,14 @@ class RBF:
         # Link the outputs
         model.link(f"src.{self.output_name}", f"constraint.{self.output_name}")
 
-        return model
-
-    def set_data(self, model, sub_name=None):
-
-        data = model.get_data_vector()
-
-        def _get_name(name):
-            if sub_name is None:
-                return name
-            else:
-                return f"{sub_name}.name"
-
         # Set the values of theta, the weights and the base locations
         for i, name in enumerate(self.theta_names):
-            data[_get_name(f"kernel.{name}[0]")] = self.theta[i]
+            model.set_data(f"kernel.{name}[0]", self.theta[i])
 
-        data[_get_name(f"kernel.{self.weight_name}[:{self.num_basis}]")] = self.weights
+        # Set the values of the weights
+        model.set_data(f"kernel.{self.weight_name}[:{self.num_basis}]", self.weights)
 
         for i, name in enumerate(self.base_names):
-            data[_get_name(f"kernel.{name}[:{self.num_basis}]")] = self.xt[:, i]
+            model.set_data(f"kernel.{name}[:{self.num_basis}]", self.xt[:, i])
+
+        return model
