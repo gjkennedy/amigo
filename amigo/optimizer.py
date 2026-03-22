@@ -255,7 +255,7 @@ class MumpsSolver(_HessianDiagMixin):
         self._mumps.icntl[2] = -1  # suppress global info output
         self._mumps.icntl[3] = 0  # no output
         self._mumps.icntl[6] = 5  # ordering: METIS if available
-        self._mumps.icntl[7] = 0  # no scaling (preserve KKT structure)
+        self._mumps.icntl[7] = 77  # automatic scaling (IPOPT default)
         self._mumps.icntl[12] = 1  # ScaLAPACK (no effect in sequential)
         self._mumps.icntl[13] = 1000  # percent increase in workspace (IPOPT default)
         self._mumps.icntl[23] = 0  # no null pivot detection
@@ -855,6 +855,8 @@ class InertiaCorrector:
         # If previous iterations needed regularization, start with a
         # fraction of the last successful delta_w instead of zero.
         self.last_inertia_delta = 0.0
+        self.last_delta_w = 0.0  # for iterative refinement
+        self.last_delta_c = 0.0  # for iterative refinement
         self._ic_iteration = 0  # iteration counter for early warm-start
         self._ic_always_dw = False  # True after first few corrections needed dw
         self._ic_always_dc = False  # True after first few corrections needed dc
@@ -1041,6 +1043,8 @@ class InertiaCorrector:
             if inertia_ok:
                 # IC-1 success: unmodified (or minimally modified) KKT works
                 self.last_inertia_delta = ic1_dw if ic1_dw > 0 else 0.0
+                self.last_delta_w = ic1_dw
+                self.last_delta_c = ic1_dc
             else:
                 # IC-2: Handle zero eigenvalues
                 # Zero eigenvalues indicate rank-deficient constraint Jacobian.
@@ -1073,6 +1077,8 @@ class InertiaCorrector:
                     # IC-4: Check if inertia is now correct
                     if _inertia_ok(n_pos, n_neg):
                         self.last_inertia_delta = delta_w
+                        self.last_delta_w = delta_w
+                        self.last_delta_c = delta_c
                         # Learn: if corrections were needed early, always
                         # warm-start in future iterations
                         if ic_iter < 3:
@@ -1115,6 +1121,8 @@ class InertiaCorrector:
                 if not inertia_ok:
                     # Save delta_w for warm-start even on failure
                     self.last_inertia_delta = delta_w
+                    self.last_delta_w = delta_w
+                    self.last_delta_c = delta_c
                     if ic_iter < 3:
                         self._ic_always_dw = True
 
@@ -1760,18 +1768,83 @@ class Optimizer:
                 self.diag.copy_host_to_device()
                 self.solver.factor(1.0, x, self.diag)
 
-    def _solve_with_mu(self, mu):
+    def _iterative_refinement(self, rhs, delta_w, delta_c, mult_ind, max_steps=10):
+        """IPOPT-style iterative refinement on the unmodified KKT system.
+
+        The factorized matrix is K_reg = K + D_reg where D_reg has +delta_w
+        on primal rows and -delta_c on dual rows.  Each refinement step
+        computes the residual on the ORIGINAL system K and corrects.
+        """
+        from scipy.sparse import csr_matrix as _csr
+
+        hess = self.solver.hess
+        nrows, ncols, nnz, rowp, cols = hess.get_nonzero_structure()
+        hess.copy_data_device_to_host()
+        data = np.array(hess.get_data())
+        K_reg = _csr((data, cols, rowp), shape=(nrows, ncols))
+
+        # Build regularization vector
+        d_reg = np.zeros(nrows)
+        if delta_w > 0:
+            d_reg[~mult_ind] = delta_w
+        if delta_c > 0:
+            d_reg[mult_ind] = -delta_c
+
+        # Initial solve (already done, px has the result)
+        px = self.px.get_array().copy()
+        rhs_arr = rhs.copy()
+        rhs_norm = np.linalg.norm(rhs_arr)
+        if rhs_norm < 1e-30:
+            return
+
+        for step in range(max_steps):
+            # Residual on the UNMODIFIED system:
+            # r = rhs - K_orig*px = rhs - (K_reg*px - D_reg*px)
+            residual = rhs_arr - K_reg.dot(px) + d_reg * px
+
+            res_norm = np.linalg.norm(residual)
+            if step >= 1 and res_norm < 1e-8 * rhs_norm:
+                break
+
+            # Back-solve with existing factorization
+            self.res.get_array()[:] = residual
+            self.res.copy_host_to_device()
+            self.solver.solve(self.res, self.px)
+            delta = self.px.get_array().copy()
+            px += delta
+
+        # Write refined solution back
+        self.px.get_array()[:] = px
+        self.px.copy_host_to_device()
+
+    def _solve_with_mu(self, mu, inertia_corrector=None, mult_ind=None):
         """Compute the Newton direction by back-solving the factorized KKT system.
 
         Given the factorized KKT matrix K from _factorize_kkt(), this computes:
           1. RHS residual r(mu) from the KKT conditions at barrier param mu
           2. Reduced-space step px = K^{-1} r
-          3. Full primal-dual update from px
+          3. Optional iterative refinement (IPOPT-style) when delta_w > 0
+          4. Full primal-dual update from px
 
         Requires _factorize_kkt() to have been called first.
         """
         self.optimizer.compute_residual(mu, self.vars, self.grad, self.res)
+        self.res.copy_device_to_host()
+        rhs_copy = self.res.get_array().copy()
+
         self.solver.solve(self.res, self.px)
+
+        # IPOPT-style iterative refinement (always, like IPOPT min_refinement_steps=1)
+        if (
+            inertia_corrector is not None
+            and mult_ind is not None
+            and hasattr(self.solver, "hess")
+        ):
+            dw = inertia_corrector.last_delta_w
+            dc = inertia_corrector.last_delta_c
+            self.px.copy_device_to_host()
+            self._iterative_refinement(rhs_copy, dw, dc, mult_ind)
+
         self.optimizer.compute_update(mu, self.vars, self.px, self.update)
 
     def _find_direction(
@@ -1801,7 +1874,7 @@ class Optimizer:
             zero_hessian_eps,
             comm_rank,
         )
-        self._solve_with_mu(self.barrier_param)
+        self._solve_with_mu(self.barrier_param, inertia_corrector, mult_ind)
 
     def _print_newton_diagnostics(self, rhs_norm, res_norm_mu, mult_ind):
         """Print detailed Newton step diagnostics (check_update_step only).
