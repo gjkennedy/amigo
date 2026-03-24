@@ -10,41 +10,28 @@ A tutorial on how to use amigo and documentation can be found here: [https://smd
 
 ## Installing amigo
 
-### Quick Start (Conda — recommended)
+Amigo uses CMake and scikit-build to build the primary amigo module and all model modules that comprise a multidisciplinary model.
 
-The easiest way to install amigo is with Conda, which handles all native dependencies (CMake, MPI, MKL, etc.) automatically.
+To build and install the primary amigo module and its python wrappers, you can build the module with
 
-**Prerequisites:** A C++ compiler is required.
-- **Windows:** Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload.
-- **macOS:** Run `xcode-select --install`.
-- **Linux:** Install `build-essential` (Ubuntu/Debian) or `gcc-c++` (Fedora).
-
-Then:
-
-```bash
-git clone https://github.com/smdogroup/amigo.git
-cd amigo
-conda env create -f environment.yml
-conda activate amigo
+```
 pip install -e .
 ```
 
-For detailed instructions and troubleshooting, see the [installation guide](https://smdogroup.github.io/amigo/docs/getting-started/installation).
+By default the OpenMP and CUDA parallelization are turned off. You can turn on or off these modules with additional command line arguments to pip. For an OpenMP and MPI install, use the pip command
 
-### Advanced Build Options
-
-By default OpenMP and CUDA parallelization are turned off. For OpenMP and MPI:
-
-```bash
+```
 pip install -e . -v \
     -Ccmake.args="-DCMAKE_CXX_COMPILER=mpicxx" \
     -Ccmake.args="-DAMIGO_ENABLE_OPENMP=ON" \
     -Ccmake.args="-DAMIGO_ENABLE_CUDA=OFF"
 ```
 
-For CUDA with CUDSS:
+For CUDA, we recommend using the NVIDIA CUDSS library that amigo can use to solve linear systems. Locally installing CUDSS is straightforward. It can be downloaded from NVIDIA webpage. Add the `$CUDSS_HOME/lib` and `$CUDSS_HOME/lib64` to your `LD_LIBRARY_PATH`. 
 
-```bash
+To enable CUDA and CUDSS and disable OpenMP, use the pip command
+
+```
 pip install -e . -v \
     -Ccmake.args="-DCMAKE_CXX_COMPILER=mpicxx" \
     -Ccmake.args="-DAMIGO_ENABLE_OPENMP=OFF" \
@@ -54,7 +41,9 @@ pip install -e . -v \
     -Ccmake.args="-DCMAKE_CUDA_ARCHITECTURES=native"
 ```
 
-Note: you cannot enable both CUDA and OpenMP at the same time.
+Note that you cannot enable both CUDA and OpenMP at the same time. 
+
+Amigo model modules inherit the build options that are selected during the install phase.
 
 ## Rosenbrock example
 
