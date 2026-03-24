@@ -1,4 +1,5 @@
 import amigo as am
+from amigo.interp import BSpline
 import numpy as np
 import sys
 import matplotlib.pylab as plt
@@ -44,19 +45,6 @@ class TrapezoidRule(am.Component):
         dt = tf / num_time_steps  # Variable time step based on final time
         self.constraints["res"] = q2 - q1 - 0.5 * dt * (q1dot + q2dot)
 
-        return
-
-
-class BSplineSource(am.Component):
-    def __init__(self, n: int = 10):
-        """
-        Source component for the x values
-
-        Args:
-            n (int) : Number of interpolating points
-        """
-        super().__init__()
-        self.add_input("x")
         return
 
 
@@ -265,14 +253,20 @@ scaling = {"velocity": 100.0, "altitude": 1000.0, "range": 1000.0, "mass": 1000.
 # Create component instances
 ac = AircraftDynamics(scaling)
 trap = TrapezoidRule()
-bspline_src = BSplineSource()
-bspline = am.BSplineInterpolant(npts=(num_time_steps + 1), k=4, n=10)
 obj = Objective()
 ic = InitialConditions(scaling)
 fc = FinalConditions(scaling)
 
 # Number of bspline control points
 nctrl = 10
+
+# Interpolate from the x control points to the angle of attack
+bspline = BSpline(
+    input_name="x",
+    output_name="alpha",
+    num_interp_points=(num_time_steps + 1),
+    num_ctrl_points=nctrl,
+)
 
 # Create the model
 module_name = "time_to_climb"
@@ -281,8 +275,7 @@ model = am.Model(module_name)
 # Add components to the model
 model.add_component("ac", num_time_steps + 1, ac)
 model.add_component("trap", 5 * num_time_steps, trap)
-model.add_component("src", nctrl, bspline_src)
-model.add_component("bspline", num_time_steps + 1, bspline)
+model.add_model("bspline", bspline.create_model())
 model.add_component("obj", 1, obj)
 model.add_component("ic", 1, ic)
 model.add_component("fc", 1, fc)
@@ -301,7 +294,7 @@ for i in range(5):
     model.link(f"ac.qdot[1:, {i}]", f"trap.q2dot[{start}:{end}]")
 
 # Link the alpha values - ac.alpha to bspline output
-model.link("ac.alpha", "bspline.output")
+model.link("ac.alpha", "bspline.interp_values.alpha")
 
 # Link final time from objective to all trapezoidal rule components
 model.link("obj.tf[0]", f"trap.tf[:]")
@@ -310,18 +303,12 @@ model.link("obj.tf[0]", f"trap.tf[:]")
 model.link("ac.q[0, :]", "ic.q[0, :]")
 model.link(f"ac.q[{num_time_steps}, :]", "fc.q[0, :]")
 
-# Add the bspline links
-bspline.add_links("bspline", model, "src.x")
-
 # Build the module if requested
 if args.build:
     model.build_module()
 
 # Initialize the model
 model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
-
-data = model.get_data_vector()
-bspline.set_data("bspline", data)
 
 print(f"Num variables:              {model.num_variables}")
 print(f"Num constraints:            {model.num_constraints}")
@@ -348,7 +335,6 @@ x["ac.q[:, 4]"] = 19.03 - 0.2 * t_guess / tf_guess  # mass decrease
 
 # Set initial guess for control (constant small angle)
 x["ac.alpha"] = 1.0
-x["bspline.input"] = 1.0
 
 # Set up bounds
 lower = model.create_vector()
@@ -378,8 +364,8 @@ lower["ac.q[:, 2]"] = 0.0
 upper["ac.q[:, 2]"] = 25.0
 
 # Set the anlge of attack between an lower and an upper bound
-lower["src.x"] = -25.0
-upper["src.x"] = 25.0
+lower["bspline.control_points.x"] = -25.0
+upper["bspline.control_points.x"] = 25.0
 
 # Optimize
 opt = am.Optimizer(model, x, lower=lower, upper=upper)
