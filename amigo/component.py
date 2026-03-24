@@ -687,11 +687,8 @@ class Component:
             mult_name = self.constraints.get_multiplier_name(name)
             if mult_name not in self.inputs:
                 shape = self.constraints.get_shape(name)
-                # sed_active=False: multipliers should not trigger binary SED
-                # filtering. The lambda*residual multiplication contributes
-                # the Jacobian (cross-derivative), which must be kept exact.
                 self.multipliers[mult_name] = Expr(
-                    VarNode(mult_name, shape=shape, sed_active=False)
+                    VarNode(mult_name, shape=shape)
                 )
 
         return
@@ -914,7 +911,6 @@ class Component:
             builder = ExprBuilder(consts, data, inputs, vars, rhs=rhs, lhs=lhs)
 
             for mode in ["eval", "grad", "hprod"]:
-                _expressions._sed_mode = mode == "hprod"
                 cpp += self._generate_compute_cpp(
                     builder,
                     lhs,
@@ -927,7 +923,6 @@ class Component:
                     hprod_name=hprod_name,
                     stack_name=stack_name,
                 )
-            _expressions._sed_mode = False
 
             # Clear the variables for the compute_output function
             self.clear()

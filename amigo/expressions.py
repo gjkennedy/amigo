@@ -1,21 +1,3 @@
-# SED mode flag: when True, ops in hprod mode emit A2D_SED:: namespace
-_sed_mode = False
-
-# Unary ops that have SED-filtered versions in a2d_sed.h
-_sed_unary_ops = {
-    "sin",
-    "cos",
-    "exp",
-    "sqrt",
-    "log",
-    "acos",
-    "asin",
-    "atan",
-    "tan",
-    "tanh",
-    "atanh",
-}
-
 
 def _normalize_shape(shape):
     if shape is None:
@@ -39,10 +21,6 @@ class ExprNode:
     def is_active(self):
         raise NotImplementedError
 
-    def is_sed_active(self):
-        """Whether this node should participate in binary SED filtering.
-        Returns False for multiplier variables and constants, True for
-        design variables and expressions depending on them."""
         return self.is_active()
 
 
@@ -66,13 +44,12 @@ class ConstNode(ExprNode):
 
 
 class VarNode(ExprNode):
-    def __init__(self, name, shape=None, type=float, active=True, sed_active=True):
+    def __init__(self, name, shape=None, type=float, active=True):
         super().__init__()
         self.name = name
         self.shape = _normalize_shape(shape)
         self.type = type
         self.active = active
-        self._sed_active = sed_active
 
     def to_key(self):
         return ("var", self.name, self.shape, self.type, self.active)
@@ -83,8 +60,6 @@ class VarNode(ExprNode):
     def is_active(self):
         return self.active
 
-    def is_sed_active(self):
-        return self.active and self._sed_active
 
 
 class IndexNode(ExprNode):
@@ -105,9 +80,6 @@ class IndexNode(ExprNode):
 
     def is_active(self):
         return self.expr.is_active()
-
-    def is_sed_active(self):
-        return self.expr.is_sed_active()
 
 
 class PassiveNode(ExprNode):
@@ -138,15 +110,10 @@ class UnaryNode(ExprNode):
         a = self.expr.to_cpp()
         if self.op == "-":
             return f"-({a})"
-        if _sed_mode and self.op in _sed_unary_ops:
-            return f"A2D_SED::{self.op}({a})"
         return f"A2D::{self.op}({a})"
 
     def is_active(self):
         return self.expr.is_active()
-
-    def is_sed_active(self):
-        return self.expr.is_sed_active()
 
 
 class BinaryNode(ExprNode):
@@ -164,8 +131,6 @@ class BinaryNode(ExprNode):
         b = self.right.to_cpp()
 
         if self.op == "**":
-            if _sed_mode:
-                return f"A2D_SED::pow({a}, {b})"
             return f"A2D::pow({a}, {b})"
         elif self.op == "atan2":
             return f"A2D::atan2({a}, {b})"
@@ -178,9 +143,6 @@ class BinaryNode(ExprNode):
 
     def is_active(self):
         return self.left.is_active() or self.right.is_active()
-
-    def is_sed_active(self):
-        return self.left.is_sed_active() or self.right.is_sed_active()
 
 
 def _to_expr(val):
@@ -286,8 +248,6 @@ class Expr:
     def is_active(self):
         return self.node.is_active()
 
-    def is_sed_active(self):
-        return self.node.is_sed_active()
 
 
 class ExprBuilder:
