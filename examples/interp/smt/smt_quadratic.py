@@ -48,7 +48,7 @@ class SMTConstraintPlaceholder(am.Component):
 
     No compute() method means is_compute_empty() returns True, so Amigo
     generates no C++ group for this component.  The ExternalSMTComponent is
-    the sole writer of 'res', avoiding a double-write segfault.
+    the sole writer of 'res'.
     """
     def __init__(self):
         super().__init__()
