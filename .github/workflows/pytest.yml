@@ -43,7 +43,7 @@ jobs:
 
       - name: Install BLAS (Windows)
         if: runner.os == 'Windows'
-        run: pip install mkl
+        run: pip install mkl mkl-devel
 
       - name: Install amigo
         run: |
