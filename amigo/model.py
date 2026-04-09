@@ -412,6 +412,12 @@ class Model:
             module_name (str): Name of the module that contains the component classes
         """
         self.module_name = module_name
+        if module_name is not None and not module_name.isidentifier():
+            raise ValueError(
+                f"module_name '{module_name}' is not a valid identifier. "
+                f"Use only letters, digits, and underscores, starting with a letter or underscore."
+            )
+        self._built = False
         self.comp = {}
         self.external_comp = {}
         self.index_pool = GlobalIndexPool()
@@ -481,6 +487,60 @@ class Model:
             constraints (List of str): List of strings of the constraint names
         """
 
+        if not isinstance(inputs, list):
+            raise TypeError(
+                f"add_external_component '{name}': inputs must be a list of strings, "
+                f"got {type(inputs).__name__}"
+            )
+        if not isinstance(constraints, list):
+            raise TypeError(
+                f"add_external_component '{name}': constraints must be a list of strings, "
+                f"got {type(constraints).__name__}"
+            )
+        for i, inp in enumerate(inputs):
+            if not isinstance(inp, str):
+                raise TypeError(
+                    f"add_external_component '{name}': inputs[{i}] must be a string, "
+                    f"got {type(inp).__name__!r}"
+                )
+        for i, con in enumerate(constraints):
+            if not isinstance(con, str):
+                raise TypeError(
+                    f"add_external_component '{name}': constraints[{i}] must be a string, "
+                    f"got {type(con).__name__!r}"
+                )
+
+        if not callable(getattr(comp_obj, "evaluate", None)):
+            raise TypeError(
+                f"add_external_component '{name}': comp_obj must have a callable 'evaluate' method"
+            )
+        if not callable(getattr(comp_obj, "get_constraint_jacobian_csr", None)):
+            raise TypeError(
+                f"add_external_component '{name}': comp_obj must have a callable "
+                f"'get_constraint_jacobian_csr' method"
+            )
+
+        # Check: if a constraint listed here is also declared in a registered Python
+        # component, that component must have an empty compute(). If compute() is non-empty,
+        # both the Python side and the external component will write to the same constraint,
+        # causing a segfault in the C++ layer.
+        for con_expr in constraints:
+            parts = con_expr.rsplit(".", 1)
+            if len(parts) == 2:
+                comp_name, con_name = parts
+                if comp_name in self.comp:
+                    py_comp = self.comp[comp_name].comp_obj
+                    if con_name in py_comp.get_constraint_names():
+                        if not py_comp.is_compute_empty():
+                            raise ValueError(
+                                f"add_external_component '{name}': constraint "
+                                f"'{con_expr}' is also declared in Python component "
+                                f"'{comp_name}', which has a non-empty compute(). "
+                                f"The Python component must have an empty compute() when "
+                                f"an external component handles the constraint — otherwise "
+                                f"both will write to the same constraint, causing a segfault."
+                            )
+
         self.external_comp[name] = ExternalComponent(
             name, comp_obj, inputs, constraints
         )
@@ -522,10 +582,10 @@ class Model:
             sub_group = model.external_comp[comp_name]
             sub_obj = sub_group.comp_obj
 
-            for iname in enumerate(sub_group.inputs):
+            for iname in sub_group.inputs:
                 sub_inputs.append(name + "." + iname)
 
-            for iname in enumerate(sub_group.constraints):
+            for iname in sub_group.constraints:
                 sub_constraints.append(name + "." + iname)
 
             self.add_external_component(sub_name, sub_obj, sub_inputs, sub_constraints)
@@ -777,6 +837,12 @@ class Model:
         resulting KKT system is a 2x2 augmented system (eq. 13).
         """
 
+        if self.module_name is not None and not self._built:
+            raise RuntimeError(
+                f"Call model.build_module() before model.initialize(). "
+                f"Module '{self.module_name}' has not been compiled in this session."
+            )
+
         self.num_variables = self._init_indices(
             self.links, self.index_pool, vtype="vars"
         )
@@ -867,17 +933,36 @@ class Model:
         comp_name = ".".join(path[:-1])
         var_name = path[-1]
 
-        if var_name in self.comp[comp_name].get_input_names():
+        if comp_name not in self.comp:
+            registered = list(self.comp.keys())
+            hints = [c for c in registered if c.startswith(comp_name + ".") or c.endswith("." + comp_name)]
+            msg = (
+                f"Component '{comp_name}' not found when resolving '{name}'. "
+                f"Registered components: {registered}"
+            )
+            if hints:
+                msg += f". Did you mean one of: {hints}?"
+            raise ValueError(msg)
+
+        group = self.comp[comp_name]
+        if var_name in group.get_input_names():
             return "input"
-        elif var_name in self.comp[comp_name].get_constraint_names():
+        elif var_name in group.get_constraint_names():
             return "constraint"
-        elif var_name in self.comp[comp_name].get_data_names():
+        elif var_name in group.get_data_names():
             return "data"
-        elif var_name in self.comp[comp_name].get_output_names():
+        elif var_name in group.get_output_names():
             return "output"
         else:
+            available = (
+                list(group.get_input_names())
+                + list(group.get_constraint_names())
+                + list(group.get_data_names())
+                + list(group.get_output_names())
+            )
             raise ValueError(
-                f"Name {comp_name}.{var_name} is neither an input, constraint, output or data"
+                f"'{var_name}' not found in component '{comp_name}'. "
+                f"Available variables: {available}"
             )
 
     def get_indices(self, name: str | List[str]):
@@ -1225,6 +1310,7 @@ class Model:
         if comm is not None:
             comm.Barrier()
 
+        self._built = True
         return
 
     def generate_cpp(self):
