@@ -776,7 +776,7 @@ class OrderingUtils {
       }
 
       // Add the result from the transpose
-      for (int i = 0; i < nvars; i++) {
+      for (int i = 0; i < ncons; i++) {
         for (int jp = jac_rowp[i]; jp < jac_rowp[i + 1]; jp++) {
           int j = jac_cols[jp];
           int col = vars[j];

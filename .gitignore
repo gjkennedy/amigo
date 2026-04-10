@@ -9,6 +9,9 @@ include/amigo_include_paths.h
 *.lib
 *.exp
 *.dll
+/_build_debug
+/amigo/amigo.cpython*
+/**/_amigo_build
 
 # Compiled Python
 **/__pycache__
@@ -37,6 +40,7 @@ include/amigo_include_paths.h
 # IDE and editor
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -73,9 +77,6 @@ env/
 
 # External dependencies
 extern/
-
-# IDE
-.vscode/
 
 # Docs build
 docs/
