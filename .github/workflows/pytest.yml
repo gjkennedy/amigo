@@ -11,7 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Windows excluded: no easy MUMPS package, optimizer tests need inertia
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout amigo
