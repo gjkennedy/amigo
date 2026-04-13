@@ -6,6 +6,7 @@ import importlib
 import subprocess
 from pathlib import Path
 from scipy.sparse import spmatrix
+import warnings
 import pybind11
 import networkx as nx
 from .amigo import (
@@ -822,7 +823,7 @@ class Model:
         """
 
         if self.module_name is not None and not self._built:
-            raise Warning(
+            warnings.warn(
                 f"Call model.build_module() before model.initialize(). "
                 f"Module '{self.module_name}' has not been compiled in this session."
             )
