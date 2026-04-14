@@ -1,4 +1,5 @@
 import types
+import numpy as np
 from .expressions import *
 from .expressions import _normalize_shape, _type_to_str, _str_to_type
 
@@ -7,13 +8,13 @@ _cpp_type_map = {int: "int", float: "double", complex: "std::complex<double>"}
 
 
 def _get_shape_from_obj(obj):
-    if not isinstance(obj, (list, tuple)):
+    if not isinstance(obj, (list, tuple, np.ndarray)):
         return ()
 
     length = len(obj)
 
     # Empty container: return current length
-    if length == 0 or not isinstance(obj[0], (list, tuple)):
+    if length == 0 or not isinstance(obj[0], (list, tuple, np.ndarray)):
         return (length,)
 
     # Recurse into first element and check consistency
@@ -28,7 +29,7 @@ def _get_shape_from_obj(obj):
 def _serialize_expr_list(expr):
     if isinstance(expr, Expr):
         return {"expr": expr.serialize()}
-    elif isinstance(expr, (list, tuple)):
+    elif isinstance(expr, (list, tuple, np.ndarray)):
         return [_serialize_expr_list(e) for e in expr]
     else:
         return None
@@ -42,7 +43,7 @@ def _serialize_expr_dict(edict):
 
 
 def _deserialize_expr_list(data):
-    if isinstance(data, (list, tuple)):
+    if isinstance(data, (list, tuple, np.ndarray)):
         return [_deserialize_expr_list(d) for d in data]
     elif isinstance(data, dict):
         return Expr.deserialize(data["expr"])

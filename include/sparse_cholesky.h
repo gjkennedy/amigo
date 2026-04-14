@@ -143,39 +143,40 @@ class SparseCholesky {
     delete[] data;
   }
 
-  /*
-    Compute the Cholesky decomposition using a left-looking supernode approach
-
-    At the current iteration L11, L21 and L31 are computed. We want to compute
-    the update to L22 and L32. This leads to the relationship
-
-    [ L11   0    0  ][ L11^T  L21^T  L31^T ] = [ x         ]
-    [ L21  L22   0  ][  0     L22^T  L32^T ] = [ x  A22    ]
-    [ L31  L32  L33 ][  0       0    L33^T ] = [ x  A32  x ]
-
-    The diagonal block gives A22 = L22 * L22^{T} + L21 * L21^{T}, which leads
-    to the factorization
-
-    L22 * L22^{T} = A22 - L21 * L21^{T}
-
-    The A32 block gives A32 = L31 * L21^{T} + L32 * L22^{T}
-
-    L32 = (A32 - L31 * L21^{T}) * L22^{-T}
-
-    This leads to the following steps in the algorithm:
-
-    (1) Compute the diagonal update: A22 <- A22 - L21 * L21^{T}
-
-    (2) Compute the column update: A32 <- A32 - L31 * L21^{T}. This is a two
-    step process whereby we first accumulate the numerical results in a
-    temporary work vector then apply them to the A32/L32 data.
-
-    After all columns in the row have completed
-
-    (3) Factor the diagonal to obtain L22
-
-    (4) Apply the factor to the column L32 <- (A32 - L31 * L21^{T}) * L22^{-T}
-  */
+  /**
+   * @brief Compute the Cholesky decomposition using a left-looking supernode
+   * approach
+   *
+   * At the current iteration L11, L21 and L31 are computed. We want to compute
+   * the update to L22 and L32. This leads to the relationship
+   *
+   * [ L11   0    0  ][ L11^T  L21^T  L31^T ] = [ x         ]
+   * [ L21  L22   0  ][  0     L22^T  L32^T ] = [ x  A22    ]
+   * [ L31  L32  L33 ][  0       0    L33^T ] = [ x  A32  x ]
+   *
+   * The diagonal block gives A22 = L22 * L22^{T} + L21 * L21^{T}, which leads
+   * to the factorization
+   *
+   * L22 * L22^{T} = A22 - L21 * L21^{T}
+   *
+   * The A32 block gives A32 = L31 * L21^{T} + L32 * L22^{T}
+   *
+   * L32 = (A32 - L31 * L21^{T}) * L22^{-T}
+   *
+   * This leads to the following steps in the algorithm:
+   *
+   * (1) Compute the diagonal update: A22 <- A22 - L21 * L21^{T}
+   *
+   * (2) Compute the column update: A32 <- A32 - L31 * L21^{T}. This is a two
+   * step process whereby we first accumulate the numerical results in a
+   * temporary work vector then apply them to the A32/L32 data.
+   *
+   * After all columns in the row have completed
+   *
+   * (3) Factor the diagonal to obtain L22
+   *
+   * (4) Apply the factor to the column L32 <- (A32 - L31 * L21^{T}) * L22^{-T}
+   */
   int factor() {
     // Set values from the matrix
     const int *mat_rowp, *mat_cols;
@@ -305,8 +306,8 @@ class SparseCholesky {
   }
 
   /*
-    Solve the system of equations with the Cholesky factorization
-  */
+   * Solve the system of equations with the Cholesky factorization
+   */
   void solve(Vector<T>* x) {
     T* xt = x->get_array();
 
@@ -375,12 +376,12 @@ class SparseCholesky {
 
  private:
   /**
-    Set the values into the matrix.
-
-    @param Acolp Pointer into the columns
-    @param Arows Row indices of the nonzero entries
-    @param Avals The numerical values
-  */
+   * @brief Set the values into the matrix.
+   *
+   * @param Acolp Pointer into the columns
+   * @param Arows Row indices of the nonzero entries
+   * @param Avals The numerical values
+   */
   void set_values(const int Acolp[], const int Arows[], const T Avals[]) {
     std::fill(data, data + data_ptr[num_snodes], T(0.0));
 
@@ -447,14 +448,14 @@ class SparseCholesky {
   }
 
   /**
-    Build the elimination tree and compute the number of non-zeros in
-    each column.
-
-    @param Acolp The pointer into each column
-    @param Arows The row indices for each matrix entry
-    @param parent The elimination tree/forest
-    @param Lnz The number of non-zeros in each column
-  */
+   * @brief Build the elimination tree and compute the number of non-zeros in
+   * each column.
+   *
+   * @param Acolp The pointer into each column
+   * @param Arows The row indices for each matrix entry
+   * @param parent The elimination tree/forest
+   * @param Lnz The number of non-zeros in each column
+   */
   void build_tree(const int Acolp[], const int Arows[], int parent[],
                   int Lnz[]) {
     int* flag = new int[size];
@@ -471,7 +472,7 @@ class SparseCholesky {
 
         if (i < k) {
           // Scan up the etree
-          for (; flag[i] != k; i = parent[i]) {
+          while (flag[i] != k) {
             if (parent[i] == -1) {
               parent[i] = k;
             }
@@ -479,6 +480,8 @@ class SparseCholesky {
             // L[k, i] is non-zero
             Lnz[i]++;
             flag[i] = k;
+
+            i = parent[i];
           }
         }
       }
@@ -488,14 +491,14 @@ class SparseCholesky {
   }
 
   /**
-    Initialize the supernodes in the matrix
-
-    The supernodes share the same column non-zero pattern
-
-    @param parent The elimination tree data
-    @param Lnz The number of non-zeros per variable
-    @param vtn The array of supernodes for each variable
-  */
+   * @brief Initialize the supernodes in the matrix
+   *
+   * The supernodes share the same column non-zero pattern
+   *
+   * @param parent The elimination tree data
+   * @param Lnz The number of non-zeros per variable
+   * @param vtn The array of supernodes for each variable
+   */
   int init_snodes(const int parent[], const int Lnz[], int vtn[]) {
     int snode = 0;
 
@@ -530,16 +533,16 @@ class SparseCholesky {
   }
 
   /**
-    Build the non-zero pattern for the supernodes in the matrix
-
-    This follows a similar logic to buildForest(), but uses the parent data.
-    This must be called after the supernodes are constructed.
-
-    @param Acolp The pointer into each column
-    @param Arows The row indices for each matrix entry
-    @param parent The elimination tree/forest
-    @param Lnz The number of non-zeros in each column
-  */
+   * @brief Build the non-zero pattern for the supernodes in the matrix
+   *
+   * This follows a similar logic to buildForest(), but uses the parent data.
+   * This must be called after the supernodes are constructed.
+   *
+   * @param Acolp The pointer into each column
+   * @param Arows The row indices for each matrix entry
+   * @param parent The elimination tree/forest
+   * @param Lnz The number of non-zeros in each column
+   */
   void build_nonzero_pattern(const int Acolp[], const int Arows[],
                              const int parent[], int Lnz[]) {
     int* flag = new int[size];
@@ -555,7 +558,7 @@ class SparseCholesky {
 
         if (i < k) {
           // Scan up the etree
-          for (; flag[i] != k; i = parent[i]) {
+          while (flag[i] != k) {
             int si = var_to_snode[i];
             int ivar = snode_to_first_var[si];
             if (i == ivar) {
@@ -567,6 +570,7 @@ class SparseCholesky {
             }
 
             flag[i] = k;
+            i = parent[i];
           }
         }
       }
@@ -576,12 +580,12 @@ class SparseCholesky {
   }
 
   /**
-    Add the diagonal update
-
-    Update the entries of the diagonal matrix
-
-    D <- D - L * L^{T}
-  */
+   * Add the diagonal update
+   *
+   * Update the entries of the diagonal matrix
+   *
+   * D <- D - L * L^{T}
+   */
   void sub_diag_update(const int lsize, const int nlrows, const int lfirst_var,
                        const int* lrows, T* L, const int diag_size, T* diag,
                        T* work) {
@@ -602,12 +606,12 @@ class SparseCholesky {
   }
 
   /**
-    Add the diagonal update
-
-    Update the entries of the diagonal matrix
-
-    D <- D + L * L^{T}
-  */
+   * Add the diagonal update
+   *
+   * Update the entries of the diagonal matrix
+   *
+   * D <- D + L * L^{T}
+   */
   void add_diag_update(const int lsize, const int nlrows, const int lfirst_var,
                        const int* lrows, T* L, const int diag_size, T* diag,
                        T* work) {
@@ -628,28 +632,28 @@ class SparseCholesky {
   }
 
   /**
-    Perform a column update into the work column.
-
-    The column T has dimensions of the number of non-zero rows in L32 by the
-    number of non-zero rows in L21.
-
-    Given the current factorization at step *, where the matrix is of the form
-
-    [ L11  0   ]
-    [ L21  *   ]
-    [ L31  Tmp ]
-
-    Compute the result
-
-    Tmp = L31 * L21^{T}
-
-    @param lwidth The number of columns in L21 and L32
-    @param n21rows The number of non-zero rows in L21
-    @param L21 The numerical values of L21 in row-major order
-    @param n31rows The number of non-zero rows in L32
-    @param L31 The numerical values of L32 in row-major order
-    @param Tmp The temporary vector
-  */
+   * @brief Perform a column update into the work column.
+   *
+   * The column T has dimensions of the number of non-zero rows in L32 by the
+   * number of non-zero rows in L21.
+   *
+   * Given the current factorization at step *, where the matrix is of the form
+   *
+   * [ L11  0   ]
+   * [ L21  *   ]
+   * [ L31  Tmp ]
+   *
+   * Compute the result
+   *
+   * Tmp = L31 * L21^{T}
+   *
+   * @param lwidth The number of columns in L21 and L32
+   * @param n21rows The number of non-zero rows in L21
+   * @param L21 The numerical values of L21 in row-major order
+   * @param n31rows The number of non-zero rows in L32
+   * @param L31 The numerical values of L32 in row-major order
+   * @param Tmp The temporary vector
+   */
   void compute_work_update(int lwidth, int n21rows, T* L21, int n31rows, T* L31,
                            T* Tmp) {
     // These matrices are stored in row-major order. To compute the result we
@@ -663,21 +667,21 @@ class SparseCholesky {
   }
 
   /**
-    Subtract a sparse column update from another sparse column
-
-    L32 = L32 - Tmp
-
-    The row indices in the input brows must be a subset of the rows in arows.
-    Both the input arows and brows must be sorted. All indices in arows must
-    exist in brows.
-
-    @param lwidth The width of the L32 column
-    @param nrows The number of the rows to update
-    @param lrows The indices of the L32 column
-    @param A The A values of the column
-    @param brows The indices of the B column
-    @param B The B values of the column
-  */
+   * @brief  Subtract a sparse column update from another sparse column
+   *
+   *  L32 = L32 - Tmp
+   *
+   *  The row indices in the input brows must be a subset of the rows in arows.
+   *  Both the input arows and brows must be sorted. All indices in arows must
+   *  exist in brows.
+   *
+   *  @param lwidth The width of the L32 column
+   *  @param nrows The number of the rows to update
+   *  @param lrows The indices of the L32 column
+   *  @param A The A values of the column
+   *  @param brows The indices of the B column
+   *  @param B The B values of the column
+   */
   void sub_column_update(const int lwidth, const int nlcols,
                          const int lfirst_var, const int* lrows, int nrows,
                          const int* arows, const T* A, const int* brows, T* B) {
@@ -696,21 +700,21 @@ class SparseCholesky {
   }
 
   /**
-    Add a sparse column update from another sparse column
-
-    L32 = L32 + Tmp
-
-    The row indices in the input brows must be a subset of the rows in arows.
-    Both the input arows and brows must be sorted. All indices in arows must
-    exist in brows.
-
-    @param lwidth The width of the L32 column
-    @param nrows The number of the rows to update
-    @param lrows The indices of the L32 column
-    @param A The A values of the column
-    @param brows The indices of the B column
-    @param B The B values of the column
-  */
+   * @brief Add a sparse column update from another sparse column
+   *
+   * L32 = L32 + Tmp
+   *
+   * The row indices in the input brows must be a subset of the rows in arows.
+   * Both the input arows and brows must be sorted. All indices in arows must
+   * exist in brows.
+   *
+   * @param lwidth The width of the L32 column
+   * @param nrows The number of the rows to update
+   * @param lrows The indices of the L32 column
+   * @param A The A values of the column
+   * @param brows The indices of the B column
+   * @param B The B values of the column
+   */
   void add_column_update(const int lwidth, const int nlcols,
                          const int lfirst_var, const int* lrows, int nrows,
                          const int* arows, const T* A, const int* brows, T* B) {
@@ -728,27 +732,27 @@ class SparseCholesky {
     }
   }
 
-  /*
-    Perform the dense Cholesky factorization of the diagonal components
-  */
+  /**
+   * Perform the dense Cholesky factorization of the diagonal components
+   */
   int factor_diag(const int diag_size, T* D) {
     int n = diag_size, info;
     lapack_pptrf<T>("U", &n, D, &info);
     return info;
   }
 
-  /*
-    Solve L * y = x and output x = y
-  */
+  /**
+   * Solve L * y = x and output x = y
+   */
   int solve_diag(int diag_size, T* L, int nrhs, T* x) {
     int info = 0;
     blas_tptrs<T>("U", "T", "N", &diag_size, &nrhs, L, x, &diag_size, &info);
     return info;
   }
 
-  /*
-    Solve L^{T} * y = x and output x = y
-  */
+  /**
+   * Solve L^{T} * y = x and output x = y
+   */
   int solve_diag_transpose(int diag_size, T* L, int nrhs, T* x) {
     int info = 0;
     blas_tptrs<T>("U", "N", "N", &diag_size, &nrhs, L, x, &diag_size, &info);
