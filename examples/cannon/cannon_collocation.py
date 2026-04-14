@@ -84,8 +84,7 @@ class CannonDynamics(am.Component):
 
         # Dynamic constraints equations
         res = 4 * [None]
-        # v = (q[2] * q[2] + q[3] * q[3]) ** 0.5
-        v = self.vars["v"] = am.sqrt(q[2] * q[2] + q[3] * q[3])
+        v = am.sqrt(q[2] * q[2] + q[3] * q[3])
 
         # Position derivatives equal velocities
         res[0] = qdot[0] - q[2]  # xdot = vx
@@ -341,10 +340,10 @@ model = create_cannon_model()
 if args.build:
     model.build_module()
 
-model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
+model.initialize()
 
-with open("cannon_model.json", "w") as fp:
-    json.dump(model.get_serializable_data(), fp, indent=2)
+# with open("cannon_model.json", "w") as fp:
+#     json.dump(model.serialize(), fp, indent=2)
 
 
 print(f"Num variables:              {model.num_variables}")
@@ -382,6 +381,7 @@ x["cannon.q[:,3]"] = vy0
 # Set Bounds
 lower = model.create_vector()
 upper = model.create_vector()
+
 # Position bounds
 lower["cannon.q[:,0]"] = -10  # x position
 upper["cannon.q[:,0]"] = 50
@@ -399,46 +399,46 @@ lower["cannon.qdot"] = -float("inf")
 upper["cannon.qdot"] = float("inf")
 
 # Optimization with trajectory recording
-opt = am.Optimizer(model, x, lower=lower, upper=upper)
-try:
-    # Record intermediate trajectories
-    opt_options = {"max_iterations": 100, "record_components": ["cannon.q"]}
-    data = opt.optimize(opt_options)
-    print("Optimization completed successfully!")
-except Exception as e:
-    print(f"Optimization failed with error: {e}")
-    if np.any(np.isnan(x[:])):
-        print("NaN values detected in solution vector!")
-    raise
+# opt = am.Optimizer(model, x, lower=lower, upper=upper)
+# try:
+#     # Record intermediate trajectories
+#     opt_options = {"max_iterations": 100, "record_components": ["cannon.q"]}
+#     data = opt.optimize(opt_options)
+#     print("Optimization completed successfully!")
+# except Exception as e:
+#     print(f"Optimization failed with error: {e}")
+#     if np.any(np.isnan(x[:])):
+#         print("NaN values detected in solution vector!")
+#     raise
 
-# Save optimization data
-with open("cannon_opt_data.json", "w") as fp:
-    json.dump(data, fp, indent=2)
+# # Save optimization data
+# with open("cannon_opt_data.json", "w") as fp:
+#     json.dump(data, fp, indent=2)
 
-# Extract trajectory history from optimization data
-trajectory_history = []
-for i, iter_data in enumerate(data["iterations"]):
-    if i % 5 == 0 and "x" in iter_data and "cannon.q" in iter_data["x"]:
-        q_data = np.array(iter_data["x"]["cannon.q"])
-        trajectory_history.append(
-            {
-                "iteration": iter_data["iteration"],
-                "x": q_data[:, 0],  # x positions
-                "y": q_data[:, 1],  # y positions
-            }
-        )
+# # Extract trajectory history from optimization data
+# trajectory_history = []
+# for i, iter_data in enumerate(data["iterations"]):
+#     if i % 5 == 0 and "x" in iter_data and "cannon.q" in iter_data["x"]:
+#         q_data = np.array(iter_data["x"]["cannon.q"])
+#         trajectory_history.append(
+#             {
+#                 "iteration": iter_data["iteration"],
+#                 "x": q_data[:, 0],  # x positions
+#                 "y": q_data[:, 1],  # y positions
+#             }
+#         )
 
-# Visualize results
-print("Creating trajectory plots...")
-plot_trajectory(x, title="Optimized Cannon Trajectory")
+# # Visualize results
+# print("Creating trajectory plots...")
+# plot_trajectory(x, title="Optimized Cannon Trajectory")
 
-# Create optimization animation
-if len(trajectory_history) > 1:
-    print("Creating optimization animation:")
-    animate_optimization_progress(trajectory_history)
-else:
-    print("Not enough trajectory data collected for animation")
+# # Create optimization animation
+# if len(trajectory_history) > 1:
+#     print("Creating optimization animation:")
+#     animate_optimization_progress(trajectory_history)
+# else:
+#     print("Not enough trajectory data collected for animation")
 
-print(f"Initial velocity: vx₀={x['cannon.q[0,2]']:.3f}, vy₀={x['cannon.q[0,3]']:.3f}")
-print(f"Final position: x={x['cannon.q[-1,0]']:.3f}, y={x['cannon.q[-1,1]']:.3f}")
-print(f"Target distance error: {abs(x['cannon.q[-1,0]'] - 6.0):.6f}")
+# print(f"Initial velocity: vx₀={x['cannon.q[0,2]']:.3f}, vy₀={x['cannon.q[0,3]']:.3f}")
+# print(f"Final position: x={x['cannon.q[-1,0]']:.3f}, y={x['cannon.q[-1,1]']:.3f}")
+# print(f"Target distance error: {abs(x['cannon.q[-1,0]'] - 6.0):.6f}")

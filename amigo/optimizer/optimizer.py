@@ -6,814 +6,23 @@ from collections import deque
 from scipy.sparse import csr_matrix
 from scipy.sparse.linalg import splu
 
-from .amigo import InteriorPointOptimizer, MemoryLocation
-from .model import ModelVector
-from .utils import tocsr
+from ..amigo import InteriorPointOptimizer, MemoryLocation
+from ..model import ModelVector
+from ..utils import tocsr
+
+from .solvers import (
+    DirectCudaSolver,
+    LNKSInexactSolver,
+    MumpsSolver,
+    PardisoSolver,
+    DirectPetscSolver,
+    DirectScipySolver,
+)
 
 try:
     from petsc4py import PETSc
 except:
     PETSc = None
-
-
-def gmres(mult, precon, b, x, msub=20, rtol=1e-2, atol=1e-30):
-    # Allocate the Hessenberg - this allocates a full matrix
-    H = np.zeros((msub + 1, msub))
-
-    # Allocate small arrays of size m
-    res = np.zeros(msub + 1)
-
-    # Store the normal rotations
-    Qsin = np.zeros(msub)
-    Qcos = np.zeros(msub)
-
-    # Allocate the subspaces
-    W = np.zeros((msub + 1, len(x)))
-    Z = np.zeros((msub, len(x)))
-
-    # Perform the initialization: copy over b to W[0] and
-    W[0, :] = b[:]
-    beta = np.linalg.norm(W[0, :])
-
-    x[:] = 0.0
-    if beta < atol:
-        return
-
-    W[0, :] /= beta
-    res[0] = beta
-
-    # Perform the matrix-vector products
-    niters = 0
-    for i in range(msub):
-        # Apply the preconditioner
-        precon(W[i, :], Z[i, :])
-
-        # Compute the matrix-vector product
-        mult(Z[i, :], W[i + 1, :])
-
-        # Perform modified Gram-Schmidt orthogonalization
-        for j in range(i + 1):
-            H[j, i] = np.dot(W[j, :], W[i + 1, :])
-            W[i + 1, :] -= H[j, i] * W[j, :]
-
-        # Compute the norm of the orthogonalized vector and
-        # normalize it
-        H[i + 1, i] = np.linalg.norm(W[i + 1, :])
-        W[i + 1, :] /= H[i + 1, i]
-
-        # Apply the Givens rotations
-        for j in range(i):
-            h1 = H[j, i]
-            h2 = H[j + 1, i]
-            H[j, i] = h1 * Qcos[j] + h2 * Qsin[j]
-            H[j + 1, i] = -h1 * Qsin[j] + h2 * Qcos[j]
-
-        # Compute the contribution to the Givens rotation
-        # for the current entry
-        h1 = H[i, i]
-        h2 = H[i + 1, i]
-
-        # Modification for complex from Saad pg. 193
-        sq = np.sqrt(h1**2 + h2**2)
-        Qsin[i] = h2 / sq
-        Qcos[i] = h1 / sq
-
-        # Apply the newest Givens rotation to the last entry
-        H[i, i] = h1 * Qcos[i] + h2 * Qsin[i]
-        H[i + 1, i] = -h1 * Qsin[i] + h2 * Qcos[i]
-
-        # Update the residual
-        h1 = res[i]
-        res[i] = h1 * Qcos[i]
-        res[i + 1] = -h1 * Qsin[i]
-
-        if np.fabs(res[i + 1]) < rtol * beta:
-            niters = i
-            break
-
-    # Compute the linear combination
-    for i in range(niters, -1, -1):
-        for j in range(i + 1, msub):
-            res[i] -= H[i, j] * res[j]
-        res[i] /= H[i, i]
-
-    # Form the linear combination
-    for i in range(msub):
-        x += res[i] * Z[i]
-
-    return
-
-
-def _find_diag_indices(rowp, cols, nrows):
-    """Find the CSR data-array index of each diagonal entry (row == col)."""
-    diag_idx = np.empty(nrows, dtype=np.intp)
-    for i in range(nrows):
-        start, end = rowp[i], rowp[i + 1]
-        row_cols = cols[start:end]
-        pos = np.searchsorted(row_cols, i)
-        if pos < len(row_cols) and row_cols[pos] == i:
-            diag_idx[i] = start + pos
-        else:
-            diag_idx[i] = start  # fallback (should not happen)
-    return diag_idx
-
-
-class _HessianDiagMixin:
-    """Shared Hessian-diagonal helpers for CSR-based solvers.
-
-    Requires subclass to have: self.problem, self.hess, self._diag_indices.
-    """
-
-    def assemble_hessian(self, alpha, x):
-        """Assemble Lagrangian Hessian and return its diagonal.
-
-        Leaves the assembled matrix in self.hess for a subsequent
-        add_diagonal_and_factor() call.  Cost: one Hessian evaluation +
-        one device-to-host copy.  No factorization.
-        """
-        self.problem.hessian(alpha, x, self.hess)
-        self.hess.copy_data_device_to_host()
-        return self.hess.get_data()[self._diag_indices].copy()
-
-    def get_hessian_diagonal(self, alpha, x):
-        """Evaluate Hessian and return its diagonal. O(n), no factorization."""
-        self.problem.hessian(alpha, x, self.hess)
-        self.hess.copy_data_device_to_host()
-        return self.hess.get_data()[self._diag_indices]
-
-
-class DirectCudaSolver:
-    def __init__(self, problem, pivot_eps=1e-12):
-        self.problem = problem
-
-        try:
-            from .amigo import CSRMatFactorCuda
-        except:
-            raise NotImplementedError("Amigo compiled without CUDA support")
-
-        loc = MemoryLocation.DEVICE_ONLY
-        self.hess = self.problem.create_matrix(loc)
-        self.solver = CSRMatFactorCuda(self.hess, pivot_eps)
-
-    def factor(self, alpha, x, diag):
-        self.problem.hessian(alpha, x, self.hess)
-        self.problem.add_diagonal(diag, self.hess)
-        self.solver.factor()
-
-    def solve(self, bx, px):
-        self.solver.solve(bx, px)
-
-
-class DirectScipySolver(_HessianDiagMixin):
-    def __init__(self, problem):
-        self.problem = problem
-        loc = MemoryLocation.HOST_AND_DEVICE
-        self.hess = self.problem.create_matrix(loc)
-        self.nrows, self.ncols, self.nnz, self.rowp, self.cols = (
-            self.hess.get_nonzero_structure()
-        )
-        self._diag_indices = _find_diag_indices(self.rowp, self.cols, self.nrows)
-        self.lu = None
-
-    def add_diagonal_and_factor(self, diag):
-        """Add diagonal to the already-assembled Hessian and factorize.
-
-        Must be called after assemble_hessian().  Modifies self.hess
-        in-place, so a subsequent retry must use factor() (which
-        re-assembles from scratch).
-        """
-        self.problem.add_diagonal(diag, self.hess)
-        self.hess.copy_data_device_to_host()
-        shape = (self.nrows, self.ncols)
-        data = self.hess.get_data()
-        H = csr_matrix((data, self.cols, self.rowp), shape=shape).tocsc()
-        self.lu = splu(H, permc_spec="COLAMD", diag_pivot_thresh=1.0)
-
-    def factor(self, alpha, x, diag, post_hessian=None):
-        """Assemble Hessian, add diagonal, and factorize (one shot).
-
-        Used for inertia-correction retries where we need a fresh
-        assembly (since add_diagonal_and_factor mutates self.hess).
-        """
-        self.problem.hessian(alpha, x, self.hess)
-        if post_hessian is not None:
-            self.hess.copy_data_device_to_host()
-            post_hessian(self.hess)
-        self.problem.add_diagonal(diag, self.hess)
-        self.hess.copy_data_device_to_host()
-        shape = (self.nrows, self.ncols)
-        data = self.hess.get_data()
-        H = csr_matrix((data, self.cols, self.rowp), shape=shape).tocsc()
-        self.lu = splu(H, permc_spec="COLAMD", diag_pivot_thresh=1.0)
-
-    def solve(self, bx, px):
-        """Solve the KKT system."""
-        bx.copy_device_to_host()
-        px.get_array()[:] = self.lu.solve(bx.get_array())
-        px.copy_host_to_device()
-
-    def solve_array(self, rhs):
-        """Solve K*x = rhs using existing factorization. Returns numpy array."""
-        return self.lu.solve(rhs)
-
-
-class MumpsSolver(_HessianDiagMixin):
-    """Sparse symmetric indefinite solver via MUMPS (LDL^T with inertia).
-
-    Uses the MUMPS C interface (dmumps_c) via ctypes. Provides exact
-    inertia counts from MUMPS info arrays after factorization.
-
-    Requires coin-or/ThirdParty-Mumps (with METIS ordering and scaling).
-    Windows: build via MSYS2 with mingw-w64-x86_64-metis.
-    Linux: apt install libmumps-dev or conda install mumps-seq or install via ThirdParty-Mumps.
-    Mac: install via ThirdParty-Mumps.
-    """
-
-    @staticmethod
-    def _load_mumps_library():
-        """Locate and load the MUMPS shared library.
-
-        Search order: MUMPS_LIB_DIR env var, coin-or ThirdParty-Mumps
-        install, conda environment, system PATH.
-        """
-        import ctypes
-
-        lib_dir = os.environ.get("MUMPS_LIB_DIR", "")
-
-        # Platform-specific library names and search paths
-        if sys.platform == "win32":
-            # Register dependency directories for Windows DLL resolution
-            for d in [
-                r"C:\msys64\mingw64\bin",
-                os.path.expanduser("~/mumps-coinor/bin"),
-            ]:
-                if os.path.isdir(d):
-                    os.add_dll_directory(d)
-
-            names = ["libcoinmumps-3.dll", "libdmumps.dll", "dmumps.dll"]
-            search_dirs = [
-                lib_dir,
-                os.path.expanduser("~/mumps-coinor/bin"),
-            ]
-            conda = os.environ.get("CONDA_PREFIX", "")
-            if conda:
-                search_dirs.append(os.path.join(conda, "Library", "bin"))
-        elif sys.platform == "darwin":
-            names = ["libcoinmumps.dylib", "libdmumps.dylib"]
-            coinor = os.path.expanduser("~/mumps-coinor/lib")
-            brew_prefix = "/opt/homebrew/opt/brewsci-mumps/lib"
-            brew_x86 = "/usr/local/opt/brewsci-mumps/lib"
-            search_dirs = [d for d in [lib_dir, coinor, brew_prefix, brew_x86] if d]
-        else:
-            names = ["libcoinmumps.so", "libdmumps.so"]
-            coinor = os.path.expanduser("~/mumps-coinor/lib")
-            search_dirs = [d for d in [lib_dir, coinor] if d]
-
-        # Try each directory + name combination, then bare names for PATH
-        for d in search_dirs:
-            if not d:
-                continue
-            for name in names:
-                path = os.path.join(d, name)
-                try:
-                    return ctypes.CDLL(path)
-                except OSError:
-                    pass
-        for name in names:
-            try:
-                return ctypes.CDLL(name)
-            except OSError:
-                pass
-
-        raise ImportError(
-            "MUMPS library not found. "
-            "Windows: build coin-or/ThirdParty-Mumps via MSYS2. "
-            "Linux: apt install libmumps-dev or conda install mumps-seq. "
-            "Mac: brew tap brewsci/num && brew install brewsci-mumps. "
-            "Or set MUMPS_LIB_DIR to the directory containing the library."
-        )
-
-    def __init__(self, problem):
-        import ctypes
-
-        self._ct = ctypes
-        self._libmumps = self._load_mumps_library()
-        self._dmumps_c = self._libmumps.dmumps_c
-        self._dmumps_c.restype = None
-
-        self.problem = problem
-        loc = MemoryLocation.HOST_AND_DEVICE
-        self.hess = self.problem.create_matrix(loc)
-        self.nrows, self.ncols, self.nnz, self.rowp, self.cols = (
-            self.hess.get_nonzero_structure()
-        )
-        self._diag_indices = _find_diag_indices(self.rowp, self.cols, self.nrows)
-
-        # Build COO triplet arrays from CSR (MUMPS uses 1-based COO)
-        # Only store lower triangle for sym=2 (symmetric indefinite)
-        row_idx = np.repeat(np.arange(self.nrows, dtype=np.int32), np.diff(self.rowp))
-        col_idx = np.array(self.cols, dtype=np.int32)
-        lower_mask = col_idx <= row_idx
-        self._irn = row_idx[lower_mask] + 1
-        self._jcn = col_idx[lower_mask] + 1
-        self._data_map = np.nonzero(lower_mask)[0].astype(np.intc)
-        self._nnz_lower = int(lower_mask.sum())
-        self._a = np.empty(self._nnz_lower, dtype=np.float64)
-
-        # Build the MUMPS struct via ctypes
-        self._build_struct()
-
-        # Initialize MUMPS (job=-1)
-        self._mumps.job = -1
-        self._mumps.par = 1
-        self._mumps.sym = 2  # symmetric indefinite (LDL^T)
-        self._mumps.comm_fortran = -987654  # MPISEQ sequential
-        self._call_mumps()
-
-        # MUMPS solver parameters
-        self._mumps.icntl[0] = -1  # ICNTL(1):  suppress error output
-        self._mumps.icntl[1] = -1  # ICNTL(2):  suppress diagnostic output
-        self._mumps.icntl[2] = -1  # ICNTL(3):  suppress global info
-        self._mumps.icntl[3] = 0  # ICNTL(4):  no output
-        self._mumps.icntl[5] = 7  # ICNTL(6):  permuting and scaling
-        self._mumps.icntl[6] = 7  # ICNTL(7):  pivot ordering (automatic)
-        self._mumps.icntl[7] = 77  # ICNTL(8):  scaling (automatic)
-        self._mumps.icntl[9] = 0  # ICNTL(10): no iterative refinement
-        self._mumps.icntl[12] = 1  # ICNTL(13): proper inertia detection
-        self._mumps.icntl[13] = 1000  # ICNTL(14): workspace increase %
-        # ICNTL(24) = 0: null pivot detection off during normal factorization.
-        # When enabled, near-zero negative pivots can be misclassified as
-        # "null", corrupting the inertia count.
-        self._mumps.icntl[23] = 0  # ICNTL(24): null pivot detection OFF
-        self._mumps.cntl[0] = 1e-6  # CNTL(1):  pivot tolerance
-
-        # Set matrix structure and values pointer
-        self._mumps.n = self.nrows
-        self._mumps.nz = int(self._nnz_lower) if self._nnz_lower < 2**31 else 0
-        self._mumps.nnz = self._nnz_lower
-        self._mumps.irn = self._irn.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
-        self._mumps.jcn = self._jcn.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
-        self._mumps.a = self._a.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-
-        # Symbolic analysis deferred to first factorization (with real values)
-        self._have_symbolic = False
-
-        self._rhs = np.empty(self.nrows, dtype=np.float64)
-        self._mumps.rhs = self._rhs.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
-        self._mumps.nrhs = 1
-        self._mumps.lrhs = self.nrows
-
-    def _build_struct(self):
-        """Build the ctypes Structure matching DMUMPS_STRUC_C (MUMPS 5.8.2)."""
-        ct = self._ct
-
-        _mumps_fields = [
-            # Control
-            ("sym", ct.c_int),
-            ("par", ct.c_int),
-            ("job", ct.c_int),
-            ("comm_fortran", ct.c_int),
-            ("icntl", ct.c_int * 60),
-            ("keep", ct.c_int * 500),
-            ("cntl", ct.c_double * 15),
-            ("dkeep", ct.c_double * 230),
-            ("keep8", ct.c_int64 * 150),
-            ("n", ct.c_int),
-            ("nblk", ct.c_int),
-            ("nz_alloc", ct.c_int),
-            # Assembled entry
-            ("nz", ct.c_int),
-            ("nnz", ct.c_int64),
-            ("irn", ct.POINTER(ct.c_int)),
-            ("jcn", ct.POINTER(ct.c_int)),
-            ("a", ct.POINTER(ct.c_double)),
-            # Distributed entry
-            ("nz_loc", ct.c_int),
-            ("nnz_loc", ct.c_int64),
-            ("irn_loc", ct.POINTER(ct.c_int)),
-            ("jcn_loc", ct.POINTER(ct.c_int)),
-            ("a_loc", ct.POINTER(ct.c_double)),
-            # Element entry
-            ("nelt", ct.c_int),
-            ("eltptr", ct.POINTER(ct.c_int)),
-            ("eltvar", ct.POINTER(ct.c_int)),
-            ("a_elt", ct.POINTER(ct.c_double)),
-            # Matrix by blocks
-            ("blkptr", ct.POINTER(ct.c_int)),
-            ("blkvar", ct.POINTER(ct.c_int)),
-            # Ordering
-            ("perm_in", ct.POINTER(ct.c_int)),
-            ("sym_perm", ct.POINTER(ct.c_int)),
-            ("uns_perm", ct.POINTER(ct.c_int)),
-            # Scaling
-            ("colsca", ct.POINTER(ct.c_double)),
-            ("rowsca", ct.POINTER(ct.c_double)),
-            ("colsca_from_mumps", ct.c_int),
-            ("rowsca_from_mumps", ct.c_int),
-            ("colsca_loc", ct.POINTER(ct.c_double)),
-            ("rowsca_loc", ct.POINTER(ct.c_double)),
-            # Info after facto
-            ("rowind", ct.POINTER(ct.c_int)),
-            ("colind", ct.POINTER(ct.c_int)),
-            ("pivots", ct.POINTER(ct.c_double)),
-            # RHS, solution, output data and statistics
-            ("rhs", ct.POINTER(ct.c_double)),
-            ("redrhs", ct.POINTER(ct.c_double)),
-            ("rhs_sparse", ct.POINTER(ct.c_double)),
-            ("sol_loc", ct.POINTER(ct.c_double)),
-            ("rhs_loc", ct.POINTER(ct.c_double)),
-            ("rhsintr", ct.POINTER(ct.c_double)),
-            ("irhs_sparse", ct.POINTER(ct.c_int)),
-            ("irhs_ptr", ct.POINTER(ct.c_int)),
-            ("isol_loc", ct.POINTER(ct.c_int)),
-            ("irhs_loc", ct.POINTER(ct.c_int)),
-            ("glob2loc_rhs", ct.POINTER(ct.c_int)),
-            ("glob2loc_sol", ct.POINTER(ct.c_int)),
-            ("nrhs", ct.c_int),
-            ("lrhs", ct.c_int),
-            ("lredrhs", ct.c_int),
-            ("nz_rhs", ct.c_int),
-            ("lsol_loc", ct.c_int),
-            ("nloc_rhs", ct.c_int),
-            ("lrhs_loc", ct.c_int),
-            ("nsol_loc", ct.c_int),
-            ("schur_mloc", ct.c_int),
-            ("schur_nloc", ct.c_int),
-            ("schur_lld", ct.c_int),
-            ("mblock", ct.c_int),
-            ("nblock", ct.c_int),
-            ("nprow", ct.c_int),
-            ("npcol", ct.c_int),
-            ("ld_rhsintr", ct.c_int),
-            ("info", ct.c_int * 80),
-            ("infog", ct.c_int * 80),
-            ("rinfo", ct.c_double * 40),
-            ("rinfog", ct.c_double * 40),
-            # Null space
-            ("deficiency", ct.c_int),
-            ("pivnul_list", ct.POINTER(ct.c_int)),
-            ("mapping", ct.POINTER(ct.c_int)),
-            ("singular_values", ct.POINTER(ct.c_double)),
-            # Schur
-            ("size_schur", ct.c_int),
-            ("listvar_schur", ct.POINTER(ct.c_int)),
-            ("schur", ct.POINTER(ct.c_double)),
-            # User workspace
-            ("wk_user", ct.POINTER(ct.c_double)),
-            # Version number (MUMPS_VERSION_MAX_LEN=30 + 1 + 1 = 32)
-            ("version_number", ct.c_char * 32),
-            # Out-of-core
-            ("ooc_tmpdir", ct.c_char * 1024),
-            ("ooc_prefix", ct.c_char * 256),
-            ("write_problem", ct.c_char * 1024),
-            ("lwk_user", ct.c_int),
-            # Save/restore
-            ("save_dir", ct.c_char * 1024),
-            ("save_prefix", ct.c_char * 256),
-            # Metis options
-            ("metis_options", ct.c_int * 40),
-            # Internal
-            ("instance_number", ct.c_int),
-        ]
-
-        class DMUMPS_STRUC_C(ct.Structure):
-            _fields_ = _mumps_fields
-
-        self._DMUMPS_STRUC_C = DMUMPS_STRUC_C
-        self._mumps = DMUMPS_STRUC_C()
-        self._dmumps_c.argtypes = [ct.POINTER(DMUMPS_STRUC_C)]
-
-    def _call_mumps(self):
-        self._dmumps_c(self._ct.byref(self._mumps))
-
-    def _factorize_current(self):
-        if not self._have_symbolic:
-            self._mumps.job = 1  # symbolic analysis with actual values
-            self._call_mumps()
-            if self._mumps.infog[0] < 0:
-                raise RuntimeError(
-                    f"MUMPS analysis failed: infog(1)={self._mumps.infog[0]}"
-                )
-            self._have_symbolic = True
-        self._mumps.job = 2  # numerical factorization
-        self._call_mumps()
-        if self._mumps.infog[0] < 0:
-            raise RuntimeError(
-                f"MUMPS factorize failed: infog(1)={self._mumps.infog[0]}, "
-                f"infog(2)={self._mumps.infog[1]}"
-            )
-
-    def _update_values(self):
-        data = self.hess.get_data()
-        self._a[:] = data[self._data_map]
-
-    def add_diagonal_and_factor(self, diag):
-        self.problem.add_diagonal(diag, self.hess)
-        self.hess.copy_data_device_to_host()
-        self._update_values()
-        self._factorize_current()
-
-    def factor(self, alpha, x, diag, post_hessian=None):
-        self.problem.hessian(alpha, x, self.hess)
-        if post_hessian is not None:
-            self.hess.copy_data_device_to_host()
-            post_hessian(self.hess)
-        self.problem.add_diagonal(diag, self.hess)
-        self.hess.copy_data_device_to_host()
-        self._update_values()
-        self._factorize_current()
-
-    def get_inertia(self):
-        """Return (n_positive, n_negative) from MUMPS infog(12).
-
-        infog(12) = number of negative pivots in LDL^T factorization.
-        With ICNTL(24)=0 (null pivot detection off), all pivots are
-        classified as positive or negative.
-        """
-        n_neg = int(self._mumps.infog[11])
-        n_pos = self.nrows - n_neg
-        return n_pos, n_neg
-
-    def solve(self, bx, px):
-        bx.copy_device_to_host()
-        self._rhs[:] = bx.get_array()
-        self._mumps.job = 3
-        self._call_mumps()
-        if self._mumps.infog[0] < 0:
-            raise RuntimeError(f"MUMPS solve failed: infog(1)={self._mumps.infog[0]}")
-        px.get_array()[:] = self._rhs
-        px.copy_host_to_device()
-
-    def solve_array(self, rhs):
-        self._rhs[:] = rhs
-        self._mumps.job = 3
-        self._call_mumps()
-        return self._rhs.copy()
-
-    def __del__(self):
-        try:
-            self._mumps.job = -2
-            self._call_mumps()
-        except Exception:
-            pass
-
-
-class PardisoSolver(_HessianDiagMixin):
-    """Sparse LDL^T solver via Intel MKL PARDISO with inertia detection.
-
-    Uses symmetric indefinite factorization (mtype=-2) which provides
-    exact inertia (positive/negative eigenvalue counts) after factorization.
-    This enables inertia correction for nonconvex optimization.
-
-    The upper-triangle sparsity structure is cached at construction time
-    so that factor() only copies data (O(nnz)) without rebuilding the
-    CSR structure. Passing the same matrix object to pypardiso lets it
-    skip symbolic analysis (phase 11) after the first factorization.
-
-    Falls back to DirectScipySolver if pypardiso is not installed.
-    """
-
-    def __init__(self, problem):
-        from pypardiso import PyPardisoSolver
-
-        self.problem = problem
-        loc = MemoryLocation.HOST_AND_DEVICE
-        self.hess = self.problem.create_matrix(loc)
-        self.nrows, self.ncols, self.nnz, self.rowp, self.cols = (
-            self.hess.get_nonzero_structure()
-        )
-        # mtype=-2: real symmetric indefinite
-        self.pardiso = PyPardisoSolver(mtype=-2)
-
-        # Pre-compute upper-triangle mask (sparsity structure is fixed).
-        # For each entry in the full CSR, mark True if col >= row.
-        upper_mask = np.empty(self.nnz, dtype=bool)
-        for i in range(self.nrows):
-            start, end = self.rowp[i], self.rowp[i + 1]
-            upper_mask[start:end] = self.cols[start:end] >= i
-        self._upper_mask = upper_mask
-
-        # Build upper-triangle CSR structure once (indices/indptr are fixed).
-        upper_cols = self.cols[upper_mask]
-        upper_indptr = np.zeros(self.nrows + 1, dtype=self.rowp.dtype)
-        for i in range(self.nrows):
-            start, end = self.rowp[i], self.rowp[i + 1]
-            upper_indptr[i + 1] = upper_indptr[i] + int(
-                np.sum(self.cols[start:end] >= i)
-            )
-        upper_data = np.zeros(len(upper_cols))
-
-        # Persistent CSR matrix — same object passed to pardiso every time
-        # so symbolic analysis (phase 11) runs once, then only numerical
-        # factorization (phase 22) on subsequent calls.
-        self._matrix = csr_matrix(
-            (upper_data, upper_cols.copy(), upper_indptr.copy()),
-            shape=(self.nrows, self.ncols),
-        )
-
-        # Pre-compute diagonal entry indices for fast diagonal extraction
-        self._diag_indices = _find_diag_indices(self.rowp, self.cols, self.nrows)
-
-    def add_diagonal_and_factor(self, diag):
-        """Add diagonal to the already-assembled Hessian and LDL^T factorize.
-
-        Must be called after assemble_hessian().  Modifies self.hess
-        in-place, so a subsequent retry must use factor() (which
-        re-assembles from scratch).
-        """
-        self.problem.add_diagonal(diag, self.hess)
-        self.hess.copy_data_device_to_host()
-        data = self.hess.get_data()
-        self._matrix.data[:] = data[self._upper_mask]
-        self.pardiso.factorize(self._matrix)
-
-    def factor(self, alpha, x, diag, _debug_inertia=False, post_hessian=None):
-        """Assemble Hessian, add diagonal, and LDL^T factorize (one shot).
-
-        Used for inertia-correction retries where we need a fresh
-        assembly (since add_diagonal_and_factor mutates self.hess).
-        """
-        self.problem.hessian(alpha, x, self.hess)
-        if post_hessian is not None:
-            self.hess.copy_data_device_to_host()
-            post_hessian(self.hess)
-        self.problem.add_diagonal(diag, self.hess)
-        self.hess.copy_data_device_to_host()
-        data = self.hess.get_data()
-        if _debug_inertia:
-            full_diag = data[self._diag_indices]
-            diag_arr = diag.get_array()
-            print(
-                f"    [DEBUG] diag vector: min={diag_arr.min():.2e}, "
-                f"max={diag_arr.max():.2e}, "
-                f"n_positive={np.sum(diag_arr > 0)}, "
-                f"n_large={np.sum(diag_arr > 1e3)}"
-            )
-            print(
-                f"    [DEBUG] CSR diagonal: min={full_diag.min():.2e}, "
-                f"max={full_diag.max():.2e}, "
-                f"n_positive={np.sum(full_diag > 0)}, "
-                f"n_large={np.sum(full_diag > 1e3)}"
-            )
-        self._matrix.data[:] = data[self._upper_mask]
-        self.pardiso.factorize(self._matrix)
-
-    def get_inertia(self):
-        """Return (n_positive, n_negative) eigenvalue counts from LDL^T.
-
-        Uses PARDISO iparm(22) and iparm(23) (1-based Fortran indexing),
-        which are iparm[21] and iparm[22] in 0-based Python indexing.
-        """
-        return int(self.pardiso.iparm[21]), int(self.pardiso.iparm[22])
-
-    def solve(self, bx, px):
-        """Solve the KKT system."""
-        bx.copy_device_to_host()
-        px.get_array()[:] = self.pardiso.solve(self._matrix, bx.get_array())
-        px.copy_host_to_device()
-
-    def solve_array(self, rhs):
-        """Solve K*x = rhs using existing factorization. Returns numpy array."""
-        return self.pardiso.solve(self._matrix, rhs)
-
-
-class LNKSInexactSolver:
-    def __init__(
-        self,
-        problem,
-        model=None,
-        state_vars=None,
-        residuals=None,
-        state_indices=None,
-        res_indices=None,
-        gmres_subspace_size=20,
-        gmres_rtol=1e-2,
-    ):
-        self.problem = problem
-        loc = MemoryLocation.HOST_AND_DEVICE
-        self.hess = self.problem.create_matrix(loc)
-        self.gmres_subspace_size = gmres_subspace_size
-        self.gmres_rtol = gmres_rtol
-
-        if state_indices is None:
-            self.state_indices = np.sort(model.get_indices(state_vars))
-        else:
-            self.state_indices = np.sort(state_indices)
-
-        if res_indices is None:
-            self.res_indices = np.sort(model.get_indices(residuals))
-        else:
-            self.res_indices = np.sort(res_indices)
-
-        if len(self.state_indices) != len(self.res_indices):
-            raise ValueError("Residual and states must be of the same dimension")
-
-        # Determine the design indices based on the remaining values
-        all_states = np.concatenate((self.state_indices, self.res_indices))
-        upper = model.num_variables
-        self.design_indices = np.sort(np.setdiff1d(np.arange(upper), all_states))
-
-    def factor(self, alpha, x, diag):
-
-        # Compute the Hessian
-        self.problem.hessian(alpha, x, self.hess)
-        self.problem.add_diagonal(diag, self.hess)
-        self.hess.copy_data_device_to_host()
-
-        # Extract the submatrices
-        self.Hmat = tocsr(self.hess)
-        self.Hxx = self.Hmat[self.design_indices, :][:, self.design_indices]
-        self.A = self.Hmat[self.res_indices, :][:, self.state_indices]
-        self.dRdx = self.Hmat[self.res_indices, :][:, self.design_indices]
-
-        # Factor the matrices required
-        self.A_lu = splu(self.A.tocsc(), permc_spec="COLAMD", diag_pivot_thresh=1.0)
-        self.Hxx_lu = splu(self.Hxx.tocsc(), permc_spec="COLAMD", diag_pivot_thresh=1.0)
-
-    def mult(self, x, y):
-        y[:] = self.Hmat @ x
-
-    def precon(self, b, x):
-        x[self.res_indices] = self.A_lu.solve(b[self.state_indices], trans="T")
-        bx = b[self.design_indices] - self.dRdx.T @ x[self.res_indices]
-        x[self.design_indices] = self.Hxx_lu.solve(bx)
-        bu = b[self.res_indices] - self.dRdx @ x[self.design_indices]
-        x[self.state_indices] = self.A_lu.solve(bu)
-
-    def solve(self, bx, px):
-        bx.copy_device_to_host()
-        gmres(
-            self.mult,
-            self.precon,
-            bx.get_array(),
-            px.get_array(),
-            msub=self.gmres_subspace_size,
-            rtol=self.gmres_rtol,
-        )
-        px.copy_host_to_device()
-
-
-class DirectPetscSolver:
-    def __init__(self, comm, mpi_problem):
-        self.comm = comm
-        self.mpi_problem = mpi_problem
-        self.hess = self.mpi_problem.create_matrix()
-        self.nrows_local = self.mpi_problem.get_num_variables()
-        self.nrows, self.ncols, self.nnz, self.rowp, self.cols = (
-            self.hess.get_nonzero_structure()
-        )
-
-        self.H = PETSc.Mat().create(comm=comm)
-
-        s = (self.nrows_local, self.ncols)
-        self.H.setSizes((s, s), bsize=1)
-        self.H.setType(PETSc.Mat.Type.MPIAIJ)
-
-        # Right-hand side and solution vector
-        self.b = PETSc.Vec().createMPI(s, bsize=1, comm=comm)
-        self.x = PETSc.Vec().createMPI(s, bsize=1, comm=comm)
-
-    def factor(self, alpha, x, diag):
-        # Compute the Hessian
-        self.mpi_problem.hessian(alpha, x, self.hess)
-        self.mpi_problem.add_diagonal(diag, self.hess)
-
-        # Extract the Hessian entries
-        data = self.hess.get_data()
-
-        nnz = self.rowp[self.nrows_local]
-        self.H.zeroEntries()
-        self.H.setValuesCSR(
-            self.rowp[: self.nrows_local + 1], self.cols[:nnz], data[:nnz]
-        )
-        self.H.assemble()
-
-        # Create KSP solver
-        self.ksp = PETSc.KSP().create(comm=self.comm)
-        self.ksp.setOperators(self.H)
-        self.ksp.setTolerances(rtol=1e-16)
-        self.ksp.setType("preonly")  # Do not iterate — direct solve only
-
-        pc = self.ksp.getPC()
-        pc.setType("cholesky")
-        pc.setFactorSolverType("mumps")
-
-        M = pc.getFactorMatrix()
-        M.setMumpsIcntl(6, 5)  # Reordering strategy
-        M.setMumpsIcntl(7, 2)  # Use scaling
-        M.setMumpsIcntl(13, 1)  # Control
-        M.setMumpsIcntl(24, 1)
-        M.setMumpsIcntl(4, 1)  # Set verbosity of the output
-        M.setMumpsCntl(1, 0.01)
-
-        self.ksp.setUp()
-
-    def solve(self, bx, px):
-
-        # Solve the system
-        self.b.getArray()[:] = bx.get_array()[: self.nrows_local]
-        self.ksp.solve(self.b, self.x)
-        px.get_array()[: self.nrows_local] = self.x.getArray()[:]
 
 
 class InertiaCorrector:
@@ -1108,7 +317,7 @@ class InertiaCorrector:
         diag.copy_host_to_device()
 
         # No inertia check available: simple fallback
-        if not hasattr(solver, "get_inertia"):
+        if not getattr(solver, "supports_inertia", False):
             try:
                 solver.add_diagonal_and_factor(diag)
             except Exception:
@@ -1349,7 +558,8 @@ class Optimizer:
             self.problem.scatter_vector(self.upper, self.mpi_problem, self.mpi_upper)
 
         # Set the solver for the KKT system
-        # AMIGO_SOLVER env var: "scipy", "mumps", "pardiso" (default: auto)
+        # solver may be: a Solver instance, a string ("scipy"|"pardiso"|"mumps"),
+        # or None (auto: try mumps -> pardiso -> scipy).
         if solver is None and self.distribute:
             self.solver = DirectPetscSolver(self.comm, self.mpi_problem)
         elif isinstance(solver, str):
@@ -1415,6 +625,7 @@ class Optimizer:
             self.res = self.problem.create_vector()
             self.diag = self.problem.create_vector()
             self.px = self.problem.create_vector()
+            self.ir_corr = self.problem.create_vector()
 
     def write_log(self, iteration, iter_data):
         if iteration % 20 == 0:
@@ -1826,21 +1037,18 @@ class Optimizer:
 
         # Solve the two linear systems (one factorization)
         # px0: affine-scaling direction (mu = 0)
+        # TODO: solution for solve_array dropped hasattr
         self.optimizer.compute_residual(0.0, self.vars, self.grad, self.res)
         dual_inf, primal_inf, _ = self.optimizer.compute_kkt_error(self.vars, self.grad)
-        if hasattr(self.solver, "solve_array"):
-            px0 = self.solver.solve_array(self.res.get_array().copy()).copy()
-        else:
-            self.solver.solve(self.res, self.px)
-            px0 = self.px.get_array().copy()
+
+        self.solver.solve(self.res, self.px)
+        px0 = self.px.get_array().copy()
 
         # px1: centering direction (mu = avg_comp)
         self.optimizer.compute_residual(mu_nat, self.vars, self.grad, self.res)
-        if hasattr(self.solver, "solve_array"):
-            px1 = self.solver.solve_array(self.res.get_array().copy()).copy()
-        else:
-            self.solver.solve(self.res, self.px)
-            px1 = self.px.get_array().copy()
+
+        self.solver.solve(self.res, self.px)
+        px1 = self.px.get_array().copy()
 
         dpx = px1 - px0  # centering component
 
@@ -2343,6 +1551,8 @@ class Optimizer:
         residual_ratio_old = 1e30
 
         n_ir_steps = 0
+
+        # TODO all of these need to have their GPU equivalent
         for step in range(max_steps):
             # Compute full 8-block residual
             Kpx = K.dot(px)
@@ -2400,7 +1610,11 @@ class Optimizer:
             e_cond[ci] = e_c
 
             # Solve correction with existing factorization
-            corr = self.solver.solve_array(e_cond)
+            self.res.get_array()[:] = e_cond
+            self.res.copy_host_to_device()
+            self.solver.solve(self.res, self.ir_corr)
+            self.ir_corr.copy_device_to_host()
+            corr = self.ir_corr.get_array()
 
             # Back-substitute for bound dual corrections
             dc = corr[pi]
@@ -2412,7 +1626,7 @@ class Optimizer:
             dx = px[pi]
             n_ir_steps += 1
 
-        pass
+        self.px.copy_host_to_device()
 
     def _solve_with_mu(self, mu, inertia_corrector=None, mult_ind=None):
         """Solve the augmented KKT system for the Newton direction.
@@ -3097,6 +2311,8 @@ class Optimizer:
     ):
         """Feasibility restoration phase (Section 3.3).
 
+        #TODO should solve a seperate NLP for constraint feasibility.
+
         Called when the filter line search fails to find an acceptable step.
         Two modes depending on the current constraint violation theta:
 
@@ -3510,7 +2726,7 @@ class Optimizer:
         watchdog_shortened_iter = 0
         watchdog_trial_iter = 0
         watchdog_iterate = None  # saved solution array
-        watchdog_delta = None  # saved search direction
+        watchdog_update_backup = self.optimizer.create_opt_vector()
         watchdog_px = None  # saved px
         watchdog_alpha_primal_test = 0.0
         watchdog_theta = 0.0
@@ -3917,7 +3133,6 @@ class Optimizer:
                 watchdog_shortened_iter = 0
                 watchdog_trial_iter = 0
                 watchdog_iterate = None
-                watchdog_delta = None
                 watchdog_px = None
                 # Reset filter reset counter for new subproblem
                 count_successive_filter_rejections = 0
@@ -4023,7 +3238,7 @@ class Optimizer:
                     # StopWatchDog: restore saved iterate
                     self.vars.get_solution().get_array()[:] = watchdog_iterate
                     self.vars.get_solution().copy_host_to_device()
-                    self.update.get_array()[:] = watchdog_delta
+                    self.update.copy(watchdog_update_backup)
                     self.update.copy_host_to_device()
                     self.px.get_array()[:] = watchdog_px
                     self.px.copy_host_to_device()
@@ -4042,7 +3257,7 @@ class Optimizer:
                     and watchdog_shortened_iter >= watchdog_trigger
                 ):
                     watchdog_iterate = self.vars.get_solution().get_array().copy()
-                    watchdog_delta = self.update.get_array().copy()
+                    watchdog_update_backup.copy(self.update)
                     watchdog_px = self.px.get_array().copy()
                     watchdog_alpha_primal_test = alpha_x
                     watchdog_theta = self._compute_filter_theta()
@@ -4112,7 +3327,7 @@ class Optimizer:
                                     :
                                 ] = watchdog_iterate
                                 self.vars.get_solution().copy_host_to_device()
-                                self.update.get_array()[:] = watchdog_delta
+                                self.update.copy(watchdog_update_backup)
                                 self.update.copy_host_to_device()
                                 self.px.get_array()[:] = watchdog_px
                                 self.px.copy_host_to_device()
