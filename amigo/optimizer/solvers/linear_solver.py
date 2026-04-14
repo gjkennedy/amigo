@@ -3,6 +3,13 @@ import numpy as np
 
 
 class LinearSolver(ABC):
+    """
+    The linear solver class is designed so that the KKT matrix is stored here,
+    and the optimizer class does not have direct access to it. The interface defines
+    the methods needed to evaluate, factor and solve the KKT system. Some solvers
+    can compute the inertia of the KKT matrix. Those solvers should also implement
+    get_inertia().
+    """
 
     @abstractmethod
     def eval_hessian(self, alpha, x):
