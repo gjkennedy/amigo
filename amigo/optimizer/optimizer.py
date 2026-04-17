@@ -3328,7 +3328,6 @@ class Optimizer:
                                 ] = watchdog_iterate
                                 self.vars.get_solution().copy_host_to_device()
                                 self.update.copy(watchdog_update_backup)
-                                self.update.copy_host_to_device()
                                 self.px.get_array()[:] = watchdog_px
                                 self.px.copy_host_to_device()
                                 self._update_gradient(self.vars.get_solution())
