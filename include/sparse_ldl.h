@@ -632,10 +632,6 @@ class SparseLDL {
       } else {
         if (fully_summed < front_size) {
           T* Wptr = W.data();
-          // This is the original version of the code. Primarily BLAS 2.
-          // info = factor_front_matrix(ks, fully_summed, front_size,
-          // front_vars, Fptr, stack, fact);
-
           info = factor_front_matrix_block(ks, fully_summed, front_size,
                                            front_vars, Fptr, nblock, Wptr,
                                            stack, fact);
@@ -1176,10 +1172,6 @@ class SparseLDL {
       // F[k:, k:] -= F[k:, kstart:kstart + kdim] @ W[k:, :kdim]^{T}
       int ndim = front_size - k;
       int kdim = kw;
-
-      // blas_gemm<T>("N", "T", ndim, ndim, kdim, -1.0, &F[k + kstart * ldf],
-      //  ldf, &W[k], ldw, 1.0, &F[k * (ldf + 1)], ldf);
-
       frontal_trailing_update(ndim, kdim, &F[k + kstart * ldf], ldf, &W[k], ldw,
                               &F[k * (ldf + 1)], ldf);
     }
