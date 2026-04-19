@@ -1,5 +1,5 @@
 """
-Tests for the SparseLDL solver
+Tests for the SparseLDL solver with solver_type = SolverType.LDL
 """
 
 import amigo as am

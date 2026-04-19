@@ -1073,6 +1073,7 @@ class SparseLDL {
               // Check if this works as a 2x2 pivot
               double delta = det / std::max(abswii + abswik, abswkk + abswik);
 
+              // Use the 2x2 Duff pivot test
               if (delta >= ustab * colmax && delta >= ustab * rowmax) {
                 // This 2x2 pivot passes the test
                 step = 2;
@@ -1125,7 +1126,6 @@ class SparseLDL {
           // Scale the column of F[k + 1:, k] *= dinv
           blas_scal<T>(n - k - 1, dinv, &F[1 + k * (ldf + 1)], 1);
         } else if (step == 2) {
-          // TODO: Implement this with blas_gemm
           // Extract the entries of the D matrix
           T d11 = W[k + kw * ldw];
           T d21 = W[k + 1 + kw * ldw];
@@ -1136,22 +1136,15 @@ class SparseLDL {
           F[k * (ldf + 1) + 1] = d21;
           F[(k + 1) * (ldf + 1)] = d22;
 
+          // Compute the inverse of the 2x2 entries
           T detinv = 1.0 / (d11 * d22 - d21 * d21);
-          T d11inv = d22 * detinv;
-          T d21inv = -d21 * detinv;
-          T d22inv = d11 * detinv;
+          T Dinv[4];
+          Dinv[0] = d22 * detinv;
+          Dinv[1] = Dinv[2] = -d21 * detinv;
+          Dinv[3] = d11 * detinv;
 
-          // Compute the entries in the column of F[k+2:, k:k + 2]
-          T* fk1 = &F[k + 2 + ldf * k];
-          T* fk2 = &F[k + 2 + ldf * (k + 1)];
-          T* wk1 = &W[k + 2 + ldw * kw];
-          T* wk2 = &W[k + 2 + ldw * (kw + 1)];
-          const T* fk1end = &F[n + ldf * k];
-
-          for (; fk1 < fk1end; fk1++, fk2++, wk1++, wk2++) {
-            fk1[0] = d11inv * wk1[0] + d21inv * wk2[0];
-            fk2[0] = d21inv * wk1[0] + d22inv * wk2[0];
-          }
+          blas_gemm<T>("N", "N", n - (k + 2), 2, 2, 1.0, &W[k + 2 + kw * ldw],
+                       ldw, Dinv, 2, 0.0, &F[k + 2 + k * ldf], ldf);
 
           // Mark these variables as 2x2 pivots
           front_vars[k] = -(front_vars[k] + 1);
