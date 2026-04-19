@@ -5,10 +5,16 @@ from amigo import MemoryLocation, SolverType, SparseLDL
 class AmigoSolver(LinearSolver):
     """Use the native Amigo LDL solver"""
 
+    supports_inertia = True
+
     def __init__(self, problem, ustab=0.01, pivot_tol=1e-14):
         self.problem = problem
         loc = MemoryLocation.HOST_AND_DEVICE
         self.hess = self.problem.create_matrix(loc)
+        self.nrows, self.ncols, self.nnz, self.rowp, self.cols = (
+            self.hess.get_nonzero_structure()
+        )
+        self._diag_indices = self._find_diag_indices(self.rowp, self.cols, self.nrows)
 
         # Create the sparse LDL solver
         stype = SolverType.LDL

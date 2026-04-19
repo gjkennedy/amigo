@@ -11,7 +11,7 @@ class LinearSolver(ABC):
     get_inertia().
     """
 
-    @abstractmethod
+    # @abstractmethod
     def eval_hessian(self, alpha, x):
         """
         Evaluate and save the Hessian at the given design point.

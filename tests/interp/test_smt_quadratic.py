@@ -14,7 +14,7 @@ Run with:
 """
 
 import numpy as np
-import pytest
+import pytest, os
 
 import amigo as am
 from amigo.interp import ExternalSMTComponent
@@ -35,9 +35,10 @@ def trained_krg():
     return sm
 
 
-@pytest.fixture(scope="module")
-def opt_result(trained_krg):
+@pytest.fixture(scope="module", params=["mumps", "amigo"])
+def opt_result(request, trained_krg):
     """Build and solve the model once; return (xvec, model)."""
+    solver = request.param
     sm = trained_krg
     smt_ext = ExternalSMTComponent(num_points=1, num_inputs=1, smt_model=sm)
 
@@ -87,7 +88,7 @@ def opt_result(trained_krg):
     lower["src.y"] = 0.25
     upper["src.y"] = float("inf")
 
-    opt = am.Optimizer(model, xvec, lower=lower, upper=upper, solver="mumps")
+    opt = am.Optimizer(model, xvec, lower=lower, upper=upper, solver=solver)
     data = opt.optimize(
         {
             "max_iterations": 200,
