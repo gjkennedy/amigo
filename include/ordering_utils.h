@@ -205,11 +205,11 @@ class OrderingUtils {
     int* iperm = new int[nrows];
 
     int use_exact_degree = 0;
-    BlockAMD::AMDReturnFlag flag =
+    BlockAMD::AMDStatus flag =
         BlockAMD::amd(nrows, rowp, cols, nmult, mult, perm, use_exact_degree);
 
-    if (flag != BlockAMD::AMDReturnFlag::SUCCESS) {
-      std::cerr << BlockAMD::error_code_to_string(flag);
+    if (flag != BlockAMD::AMDStatus::SUCCESS) {
+      std::cerr << BlockAMD::error_code_to_string(flag) << std::endl;
     }
 
     for (int i = 0; i < nrows; i++) {
@@ -295,6 +295,68 @@ class OrderingUtils {
 
     *iperm_ = iperm;
     *perm_ = perm;
+  }
+
+  /**
+   * @brief Copy the CSR data for subsequent reordering.
+   *
+   * For Metis reordering, we have to eliminate the diagonal entries. For AMD
+   * ordering, we have to add the diagonal.
+   *
+   * @param order The ordering type
+   * @param nrows Number of rows
+   * @param rowp Pointer into the rows
+   * @param cols Column indices for each row
+   * @param rowp_copy_ Copied/modified rowp pointer
+   * @param cols_copy_ Copied/modified column indices
+   */
+  static void copy_for_reorder(OrderingType order, int nrows, const int rowp[],
+                               const int cols[], int* rowp_copy_[],
+                               int* cols_copy_[]) {
+    int* rowp_copy = nullptr;
+    int* cols_copy = nullptr;
+    if (order == OrderingType::NESTED_DISSECTION) {
+      rowp_copy = new int[nrows + 1];
+      cols_copy = new int[rowp[nrows]];
+
+      int ptr = 0;
+      rowp_copy[0] = 0;
+      for (int i = 0; i < nrows; i++) {
+        for (int jp = rowp[i]; jp < rowp[i + 1]; jp++) {
+          int j = cols[jp];
+          if (i != j) {
+            cols_copy[ptr] = j;
+            ptr++;
+          }
+        }
+        rowp_copy[i + 1] = ptr;
+      }
+    } else {
+      rowp_copy = new int[nrows + 1];
+      cols_copy = new int[rowp[nrows] + nrows];
+
+      int ptr = 0;
+      rowp_copy[0] = 0;
+      for (int i = 0; i < nrows; i++) {
+        // Add the diagonal
+        cols_copy[ptr] = i;
+        ptr++;
+
+        // Copy the remainder of the row
+        for (int jp = rowp[i]; jp < rowp[i + 1]; jp++) {
+          int j = cols[jp];
+          cols_copy[ptr] = j;
+          ptr++;
+        }
+        rowp_copy[i + 1] = ptr;
+      }
+    }
+
+    // Sort the rows and uniquify
+    sort_and_uniquify_csr(nrows, rowp_copy, cols_copy);
+
+    *rowp_copy_ = rowp_copy;
+    *cols_copy_ = cols_copy;
   }
 
   /**

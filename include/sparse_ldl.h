@@ -86,7 +86,7 @@ class SparseLDL {
     cholesky_int_nnz = 0;
     cholesky_factor_nnz = 0;
     num_snodes = 0;
-    perm = nullptr;
+    iperm = nullptr;
     snode_size = nullptr;
     snode_to_var = nullptr;
     num_children = nullptr;
@@ -103,8 +103,8 @@ class SparseLDL {
     symbolic_analysis(order, nrows, rowp, cols);
   }
   ~SparseLDL() {
-    if (perm) {
-      delete[] perm;
+    if (iperm) {
+      delete[] iperm;
     }
     delete[] snode_size;
     delete[] snode_to_var;
@@ -769,13 +769,13 @@ class SparseLDL {
       for (int j = 0; j < ns; j++) {
         // Get the column variable associated with the snode
         int var = snode_to_var[k + j];
-        int pj = perm[var];
+        int pj = iperm[var];
         T* Fj = &F[front_size * j];
 
         for (int ip = colp[var]; ip < colp[var + 1]; ip++) {
           // Get the original row index
           int i = rows[ip];
-          int pi = perm[i];
+          int pi = iperm[i];
 
           // Get the front index
           int ifront = front_indices[i];
@@ -1681,17 +1681,16 @@ class SparseLDL {
   void symbolic_analysis(OrderingType order, const int ncols, const int colp[],
                          const int rows[]) {
     // Compute the ordering
-    perm = nullptr;
-    int* iperm = nullptr;
+    int* perm = nullptr;
+    iperm = nullptr;
 
     // If the ordering type is natural, we don't create a permutation of the
     // original matrix
     if (order != OrderingType::NATURAL) {
-      int* colp_copy = new int[ncols + 1];
-      int* rows_copy = new int[colp[ncols]];
-      std::copy(colp, colp + ncols + 1, colp_copy);
-      std::copy(rows, rows + colp[ncols], rows_copy);
-
+      int* colp_copy = nullptr;
+      int* rows_copy = nullptr;
+      OrderingUtils::copy_for_reorder(order, ncols, colp, rows, &colp_copy,
+                                      &rows_copy);
       OrderingUtils::reorder(order, ncols, colp_copy, rows_copy, &perm, &iperm);
 
       // Free the copied matrix data
@@ -1801,8 +1800,8 @@ class SparseLDL {
     delete[] Lnz;
     delete[] var_to_snode;
 
-    if (iperm) {
-      delete[] iperm;
+    if (perm) {
+      delete[] perm;
     }
   }
 
@@ -2315,7 +2314,7 @@ class SparseLDL {
   int cholesky_factor_nnz;
 
   // Permutation array defined - nullptr if order == NATURAL
-  int* perm;
+  int* iperm;
 
   // Number of super nodes in the matrix
   int num_snodes;
