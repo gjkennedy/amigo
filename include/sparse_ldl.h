@@ -1707,12 +1707,6 @@ class SparseLDL {
     int* Lnz = new int[ncols];
     count_column_nonzeros(ncols, colp, rows, perm, iperm, parent, Lnz, work);
 
-    // Use the work array as a temporary here
-    int* post = work;
-    for (int i = 0; i < ncols; i++) {
-      post[ipost[i]] = i;
-    }
-
     // Initialize the super nodes. snode_to_var points from the
     // supernode to the variables in the permuted order. After initializing the
     // the non-zero pattern in the matrix, we set snode_to_var so that it points
@@ -2040,7 +2034,7 @@ class SparseLDL {
     int snode = 0;
 
     // Loop over subsequent numbers in the post-ordering of the permuted matrix
-    for (int i = 0; i < ncols;) {
+    for (int i = 0; i < ncols; snode++) {
       int var = post[i];
 
       // Set the super node
@@ -2062,8 +2056,6 @@ class SparseLDL {
           next_var = post[i];
         }
       }
-
-      snode++;
     }
 
     return snode;
