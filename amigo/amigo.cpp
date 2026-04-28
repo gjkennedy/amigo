@@ -638,18 +638,16 @@ PYBIND11_MODULE(amigo, mod) {
                  self->solve(nrhs, data, n);
                  return;
                } else {
-                 // Copy to Fortran order
-                 py::array_t<double, py::array::f_style> farr(darr);
+                 py::array_t<double, py::array::f_style | py::array::forcecast>
+                     farr(arr);
 
-                 auto info = farr.request();
-                 double* data = static_cast<double*>(info.ptr);
+                 auto finfo = farr.request();
+                 double* data = static_cast<double*>(finfo.ptr);
 
                  self->solve(nrhs, data, n);
 
-                 // Copy result back into original array, preserving
-                 // Python-visible overwrite behavior.
-                 arr.attr("__setitem__")(py::slice(nullptr, nullptr, nullptr),
-                                         farr);
+                 py::module_::import("numpy").attr("copyto")(arr, farr);
+
                  return;
                }
              }
