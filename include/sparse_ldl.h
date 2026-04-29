@@ -446,7 +446,7 @@ class SparseLDL {
      */
     int add_delayed_pivots(int fully_summed, int num_children,
                            const int children[], int front_vars[],
-                           int front_indices[]) {
+                           int front_indices[]) const {
       for (int c = 0; c < num_children; c++) {
         int child = children[c];
 
@@ -483,18 +483,16 @@ class SparseLDL {
      */
     void add_contribution(int snode, int num_pivots, int num_delayed_pivots,
                           int front_size, const int vars[], const T F[]) {
-      ContribNode& node = nodes[snode];
-
       // Insert the variables
-      node.vars.assign(vars + num_pivots, vars + front_size);
+      nodes[snode].vars.assign(vars + num_pivots, vars + front_size);
 
       // Record the number of delayed pivots
-      node.num_delayed = num_delayed_pivots;
+      nodes[snode].num_delayed = num_delayed_pivots;
 
       // Insert the contribution block itself
       int contrib_size = front_size - num_pivots;
-      node.block.resize((contrib_size * (contrib_size + 1)) / 2);
-      T* ptr = node.block.data();
+      nodes[snode].block.resize((contrib_size * (contrib_size + 1)) / 2);
+      T* ptr = nodes[snode].block.data();
       for (int j = num_pivots; j < front_size; j++) {
         for (int i = j; i < front_size; i++, ptr++) {
           ptr[0] = F[i + front_size * j];
@@ -522,7 +520,7 @@ class SparseLDL {
 
    private:
     struct ContribNode {
-      int num_delayed;
+      int num_delayed = 0;
       std::vector<int> vars;
       std::vector<T> block;
     };
@@ -585,8 +583,13 @@ class SparseLDL {
 #pragma omp single
 #endif  // AMIGO_USE_OPENMP
         {
-          int info = factor_numeric_node_task<stype>(root, ncols, colp, rows,
-                                                     data, contrib, assembly);
+#ifdef AMIGO_USE_OPENMP
+#pragma omp taskgroup
+#endif  // AMIGO_USE_OPENMP
+          {
+            int info = factor_numeric_node_task<stype>(root, ncols, colp, rows,
+                                                       data, contrib, assembly);
+          }
         }
       }
     }
@@ -605,8 +608,9 @@ class SparseLDL {
     for (int k = 0; k < num_children; k++) {
       int child = children[k];
 #ifdef AMIGO_USE_OPENMP
-#pragma omp task firstprivate(child)
-#endif  // AMIGO_USE_OPENMP
+#pragma omp task firstprivate(child) \
+    shared(contrib, assembly, colp, rows, data)  // if (num_children > 1)
+#endif
       {
         int info = factor_numeric_node_task<stype>(child, ncols, colp, rows,
                                                    data, contrib, assembly);
@@ -623,14 +627,9 @@ class SparseLDL {
     tid = omp_get_thread_num();
 #endif  // AMIGO_USE_OPENMP
 
-    // // Get the front variable arrays from the contribution data
-    // int *front_vars = nullptr, *front_indices = nullptr;
-    // assembly.get_front_arrays(tid, &front_vars, &front_indices);
-
-    std::vector<int> fvars(ncols);
-    std::vector<int> fidx(ncols, -1);
-    int* front_vars = fvars.data();
-    int* front_indices = fidx.data();
+    // Get the front variable arrays from the contribution data
+    int *front_vars = nullptr, *front_indices = nullptr;
+    assembly.get_front_arrays(tid, &front_vars, &front_indices);
 
     // Get the frontal variables
     int fully_summed = 0, front_size = 0;
@@ -639,18 +638,15 @@ class SparseLDL {
 
     // Get the temporary matrix data and ensure that there's enough space
     // allocated
-    // std::vector<T>& F = assembly.get_front_matrix(tid);
-    // if (F.size() < front_size * front_size) {
-    //   F.resize(front_size * front_size);
-    // }
+    std::vector<T>& F = assembly.get_front_matrix(tid);
+    if (F.size() < front_size * front_size) {
+      F.resize(front_size * front_size);
+    }
 
-    // std::vector<T>& W = assembly.get_work_matrix(tid);
-    // if (stype == SolverType::LDL && W.size() < block_size * front_size) {
-    //   W.resize(block_size * front_size);
-    // }
-
-    std::vector<T> F(front_size * front_size);
-    std::vector<T> W(front_size * block_size);
+    std::vector<T>& W = assembly.get_work_matrix(tid);
+    if (stype == SolverType::LDL && W.size() < block_size * front_size) {
+      W.resize(block_size * front_size);
+    }
 
     // Assemble the front matrices from the children
     assemble_front_matrix(ks, num_children, children, front_size, front_indices,
