@@ -479,7 +479,8 @@ opt_data = opt.optimize(
         "quality_function_balancing_term": "cubic",
         "adaptive_mu_safeguard_factor": 1e-1,
         "filter_line_search": True,
-        "verbose_barrier": True,
+        "second_order_correction": False,
+        "verbose_barrier": False,
     }
 )
 

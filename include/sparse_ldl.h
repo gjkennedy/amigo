@@ -1,12 +1,14 @@
 #ifndef AMIGO_SPARSE_LDL_H
 #define AMIGO_SPARSE_LDL_H
 
+#include <mutex>
+
 #include "blas_interface.h"
 #include "csr_matrix.h"
 #include "ordering_utils.h"
 
 #ifdef AMIGO_USE_OPENMP
-#include "omp.h"
+#include <omp.h>
 #endif  // AMIGO_USE_OPENMP
 
 namespace amigo {
@@ -404,27 +406,79 @@ class SparseLDL {
     std::vector<NodeFactor> nodes;
   };
 
-  class FrontAssemblyData {
+  class ResourcePool {
    public:
-    FrontAssemblyData(int max_threads, int ncols, int max_front_dim)
-        : front_vars(max_threads, std::vector<int>(ncols)),
-          front_indices(max_threads, std::vector<int>(ncols)),
-          F(max_threads, std::vector<T>(max_front_dim * max_front_dim)),
-          W(max_threads, std::vector<T>(max_front_dim * block_size)) {}
+    ResourcePool(int ncols, int min_front_dim = 256) : ncols(ncols) {}
 
-    void get_front_arrays(int tid, int* front_vars_[], int* front_indices_[]) {
-      *front_vars_ = front_vars[tid].data();
-      *front_indices_ = front_indices[tid].data();
+    std::vector<int> borrow_vars() {
+      std::lock_guard<std::mutex> lock(vars_mtx);
+      if (vars_pool.empty()) {
+        return std::vector<int>(ncols);
+      }
+      auto buf = std::move(vars_pool.back());
+      vars_pool.pop_back();
+      return buf;
+    }
+    void return_vars(std::vector<int>&& buf) {
+      std::lock_guard<std::mutex> lock(vars_mtx);
+      vars_pool.push_back(std::move(buf));
     }
 
-    std::vector<T>& get_front_matrix(int tid) { return F[tid]; }
-    std::vector<T>& get_work_matrix(int tid) { return W[tid]; }
+    std::vector<int> borrow_indices() {
+      std::lock_guard<std::mutex> lock(index_mtx);
+      if (index_pool.empty()) {
+        return std::vector<int>(ncols, -1);
+      }
+      auto buf = std::move(index_pool.back());
+      index_pool.pop_back();
+      return buf;
+    }
+    void return_indices(std::vector<int>&& buf) {
+      std::lock_guard<std::mutex> lock(index_mtx);
+      index_pool.push_back(std::move(buf));
+    }
 
+    std::vector<T> borrow_front_matrix() {
+      std::lock_guard<std::mutex> lock(front_mtx);
+      if (front_pool.empty()) {
+        return std::vector<T>(min_front_dim * min_front_dim);
+      }
+      auto buf = std::move(front_pool.back());
+      front_pool.pop_back();
+      return buf;
+    }
+    void return_front_matrix(std::vector<T>&& buf) {
+      std::lock_guard<std::mutex> lock(front_mtx);
+      front_pool.push_back(std::move(buf));
+    }
+
+    std::vector<T> borrow_work_matrix() {
+      std::lock_guard<std::mutex> lock(work_mtx);
+      if (work_pool.empty()) {
+        return std::vector<T>(min_front_dim * block_size);
+      }
+      auto buf = std::move(work_pool.back());
+      work_pool.pop_back();
+      return buf;
+    }
+    void return_work_matrix(std::vector<T>&& buf) {
+      std::lock_guard<std::mutex> lock(work_mtx);
+      work_pool.push_back(std::move(buf));
+    }
+
+   private:
     // Variables allocated per thread
-    std::vector<std::vector<int>> front_vars;
-    std::vector<std::vector<int>> front_indices;
-    std::vector<std::vector<T>> F;
-    std::vector<std::vector<T>> W;
+    int ncols;
+    int min_front_dim;
+    std::mutex vars_mtx;
+    std::vector<std::vector<int>> vars_pool;
+    std::mutex index_mtx;
+    std::vector<std::vector<int>> index_pool;
+
+    std::mutex front_mtx;
+    std::vector<std::vector<T>> front_pool;
+    std::mutex work_mtx;
+    std::vector<std::vector<T>> work_pool;
   };
 
   /**
@@ -554,17 +608,10 @@ class SparseLDL {
     // Clear any old factorization data
     fact.clear();
 
-    int max_threads = 1;
-#ifdef AMIGO_USE_OPENMP
-    max_threads = omp_get_max_threads();
-#endif
     // Estimate the max front dimension
-    int max_front_dim = int(delay_growth * max_frontal_mat_dimension);
-    FrontAssemblyData assembly(max_threads, ncols, max_front_dim);
+    ResourcePool pool(ncols);
 
-    // Use estimates of the contribution stack sizes
-    // int int_estimate = int(delay_growth * stack_int_estimate);
-    // int nnz_estimate = int(delay_growth * stack_nnz_estimate);
+    // Use estimates of the contribution
     ContributionData contrib(num_snodes);
 
     // Loop over all roots because we can't assume that the matrix is
@@ -583,13 +630,8 @@ class SparseLDL {
 #pragma omp single
 #endif  // AMIGO_USE_OPENMP
         {
-#ifdef AMIGO_USE_OPENMP
-#pragma omp taskgroup
-#endif  // AMIGO_USE_OPENMP
-          {
-            int info = factor_numeric_node_task<stype>(root, ncols, colp, rows,
-                                                       data, contrib, assembly);
-          }
+          int info = factor_numeric_node_task<stype>(root, ncols, colp, rows,
+                                                     data, contrib, pool);
         }
       }
     }
@@ -600,8 +642,7 @@ class SparseLDL {
   template <SolverType stype>
   int factor_numeric_node_task(int ks, const int ncols, const int colp[],
                                const int rows[], const T data[],
-                               ContributionData& contrib,
-                               FrontAssemblyData& assembly) {
+                               ContributionData& contrib, ResourcePool& pool) {
     int num_children = snode_children_ptr[ks + 1] - snode_children_ptr[ks];
     const int* children = &snode_children[snode_children_ptr[ks]];
 
@@ -609,11 +650,11 @@ class SparseLDL {
       int child = children[k];
 #ifdef AMIGO_USE_OPENMP
 #pragma omp task firstprivate(child) \
-    shared(contrib, assembly, colp, rows, data)  // if (num_children > 1)
+    shared(contrib, pool, colp, rows, data) if (num_children > 1)
 #endif
       {
         int info = factor_numeric_node_task<stype>(child, ncols, colp, rows,
-                                                   data, contrib, assembly);
+                                                   data, contrib, pool);
       }
     }
 
@@ -621,15 +662,11 @@ class SparseLDL {
 #pragma omp taskwait
 #endif  // AMIGO_USE_OPENMP
 
-    // Get data for this thread
-    int tid = 0;
-#ifdef AMIGO_USE_OPENMP
-    tid = omp_get_thread_num();
-#endif  // AMIGO_USE_OPENMP
-
-    // Get the front variable arrays from the contribution data
-    int *front_vars = nullptr, *front_indices = nullptr;
-    assembly.get_front_arrays(tid, &front_vars, &front_indices);
+    // Get the front variable arrays from the resource pool
+    std::vector<int> front_vars_ = pool.borrow_vars();
+    int* front_vars = front_vars_.data();
+    std::vector<int> front_indices_ = pool.borrow_indices();
+    int* front_indices = front_indices_.data();
 
     // Get the frontal variables
     int fully_summed = 0, front_size = 0;
@@ -638,12 +675,12 @@ class SparseLDL {
 
     // Get the temporary matrix data and ensure that there's enough space
     // allocated
-    std::vector<T>& F = assembly.get_front_matrix(tid);
+    std::vector<T> F = pool.borrow_front_matrix();
     if (F.size() < front_size * front_size) {
       F.resize(front_size * front_size);
     }
 
-    std::vector<T>& W = assembly.get_work_matrix(tid);
+    std::vector<T> W = pool.borrow_work_matrix();
     if (stype == SolverType::LDL && W.size() < block_size * front_size) {
       W.resize(block_size * front_size);
     }
@@ -670,6 +707,11 @@ class SparseLDL {
 
     // Reset the front variables
     reset_front_vars(fully_summed, front_size, front_vars, front_indices);
+
+    pool.return_front_matrix(std::move(F));
+    pool.return_work_matrix(std::move(W));
+    pool.return_vars(std::move(front_vars_));
+    pool.return_indices(std::move(front_indices_));
 
     return 0;
   }
