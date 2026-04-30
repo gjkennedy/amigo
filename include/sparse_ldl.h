@@ -121,7 +121,7 @@ class SparseLDL {
     delete[] contrib_rows;
   }
 
-  static constexpr int block_size = 64;
+  static constexpr int block_size = 48;
 
   /**
    * @brief Perform an LDL^{T} factorization of the matrix
@@ -682,13 +682,20 @@ class SparseLDL {
     // Get the temporary matrix data and ensure that there's enough space
     // allocated
     std::vector<T> F = pool.borrow_front_matrix();
-    if (F.size() < front_size * front_size) {
+    const int min_dim = block_size;
+    if (front_size < min_dim && F.size() < min_dim * min_dim) {
+      F.resize(min_dim * min_dim);
+    } else if (F.size() < front_size * front_size) {
       F.resize(front_size * front_size);
     }
 
     std::vector<T> W = pool.borrow_work_matrix();
-    if (stype == SolverType::LDL && W.size() < block_size * front_size) {
-      W.resize(block_size * front_size);
+    if (stype == SolverType::LDL) {
+      if (front_size < min_dim && W.size() < block_size * min_dim) {
+        W.resize(block_size * min_dim);
+      } else if (W.size() < block_size * front_size) {
+        W.resize(block_size * front_size);
+      }
     }
 
     // Assemble the front matrices from the children
