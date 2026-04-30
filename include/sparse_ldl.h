@@ -121,7 +121,7 @@ class SparseLDL {
     delete[] contrib_rows;
   }
 
-  static constexpr int block_size = 48;
+  static constexpr int block_size = 64;
 
   /**
    * @brief Perform an LDL^{T} factorization of the matrix
@@ -406,77 +406,40 @@ class SparseLDL {
     std::vector<NodeFactor> nodes;
   };
 
+  /**
+   * @brief Resource pool for thread data
+   *
+   */
   class ResourcePool {
    public:
+    struct ResourceNode {
+      std::vector<int> vars;
+      std::vector<int> indices;
+      std::vector<T> F;
+      std::vector<T> W;
+    };
+
     ResourcePool() {}
 
-    std::vector<int> borrow_vars() {
-      std::lock_guard<std::mutex> lock(vars_mtx);
-      if (vars_pool.empty()) {
-        return std::vector<int>();
+    ResourceNode borrow_node() {
+      std::lock_guard<std::mutex> lock(mtx);
+      if (pool.empty()) {
+        return ResourceNode{};
       }
-      auto buf = std::move(vars_pool.back());
-      vars_pool.pop_back();
+      auto buf = std::move(pool.back());
+      pool.pop_back();
       return buf;
-    }
-    void return_vars(std::vector<int>&& buf) {
-      std::lock_guard<std::mutex> lock(vars_mtx);
-      vars_pool.push_back(std::move(buf));
     }
 
-    std::vector<int> borrow_indices() {
-      std::lock_guard<std::mutex> lock(index_mtx);
-      if (index_pool.empty()) {
-        return std::vector<int>();
-      }
-      auto buf = std::move(index_pool.back());
-      index_pool.pop_back();
-      return buf;
-    }
-    void return_indices(std::vector<int>&& buf) {
-      std::lock_guard<std::mutex> lock(index_mtx);
-      index_pool.push_back(std::move(buf));
-    }
-
-    std::vector<T> borrow_front_matrix() {
-      std::lock_guard<std::mutex> lock(front_mtx);
-      if (front_pool.empty()) {
-        return std::vector<T>();
-      }
-      auto buf = std::move(front_pool.back());
-      front_pool.pop_back();
-      return buf;
-    }
-    void return_front_matrix(std::vector<T>&& buf) {
-      std::lock_guard<std::mutex> lock(front_mtx);
-      front_pool.push_back(std::move(buf));
-    }
-
-    std::vector<T> borrow_work_matrix() {
-      std::lock_guard<std::mutex> lock(work_mtx);
-      if (work_pool.empty()) {
-        return std::vector<T>();
-      }
-      auto buf = std::move(work_pool.back());
-      work_pool.pop_back();
-      return buf;
-    }
-    void return_work_matrix(std::vector<T>&& buf) {
-      std::lock_guard<std::mutex> lock(work_mtx);
-      work_pool.push_back(std::move(buf));
+    void return_node(ResourceNode&& buf) {
+      std::lock_guard<std::mutex> lock(mtx);
+      pool.push_back(std::move(buf));
     }
 
    private:
     // Variables allocated per thread
-    std::mutex vars_mtx;
-    std::vector<std::vector<int>> vars_pool;
-    std::mutex index_mtx;
-    std::vector<std::vector<int>> index_pool;
-
-    std::mutex front_mtx;
-    std::vector<std::vector<T>> front_pool;
-    std::mutex work_mtx;
-    std::vector<std::vector<T>> work_pool;
+    std::mutex mtx;
+    std::vector<ResourceNode> pool;
   };
 
   /**
@@ -661,16 +624,15 @@ class SparseLDL {
 #endif  // AMIGO_USE_OPENMP
 
     // Get the front variable arrays from the resource pool
-    std::vector<int> front_vars_ = pool.borrow_vars();
-    if (front_vars_.size() < ncols) {
-      front_vars_.resize(ncols);
+    auto node = pool.borrow_node();
+    if (node.vars.size() < ncols) {
+      node.vars.resize(ncols);
     }
-    std::vector<int> front_indices_ = pool.borrow_indices();
-    if (front_indices_.size() < ncols) {
-      front_indices_.resize(ncols, -1);
+    if (node.indices.size() < ncols) {
+      node.indices.resize(ncols, -1);
     }
-    int* front_vars = front_vars_.data();
-    int* front_indices = front_indices_.data();
+    int* front_vars = node.vars.data();
+    int* front_indices = node.indices.data();
 
     // Get the frontal variables
     int fully_summed = 0, front_size = 0;
@@ -679,52 +641,49 @@ class SparseLDL {
 
     // Get the temporary matrix data and ensure that there's enough space
     // allocated
-    std::vector<T> F = pool.borrow_front_matrix();
-    const int min_dim = block_size;
-    if (front_size < min_dim && F.size() < min_dim * min_dim) {
-      F.resize(min_dim * min_dim);
-    } else if (F.size() < front_size * front_size) {
-      F.resize(front_size * front_size);
+    const int min_dim = 16;
+    if (front_size < min_dim && node.F.size() < min_dim * min_dim) {
+      node.F.resize(min_dim * min_dim);
+    } else if (node.F.size() < front_size * front_size) {
+      node.F.resize(front_size * front_size);
     }
 
-    std::vector<T> W = pool.borrow_work_matrix();
     if (stype == SolverType::LDL) {
-      if (front_size < min_dim && W.size() < block_size * min_dim) {
-        W.resize(block_size * min_dim);
-      } else if (W.size() < block_size * front_size) {
-        W.resize(block_size * front_size);
+      if (front_size < min_dim && node.W.size() < block_size * min_dim) {
+        node.W.resize(block_size * min_dim);
+      } else if (node.W.size() < block_size * front_size) {
+        node.W.resize(block_size * front_size);
       }
     }
 
     // Assemble the front matrices from the children
     assemble_front_matrix(ks, num_children, children, front_size, front_indices,
-                          colp, rows, data, contrib, F.data());
+                          colp, rows, data, contrib, node.F.data());
 
     // Factor the frontal matrix and save the results
     int info = 0;
     if constexpr (stype == SolverType::CHOLESKY) {
       // The Cholesky code works for both frontal and root matrices
-      info = factor_front_matrix_cholesky(ks, fully_summed, front_size,
-                                          front_vars, F.data(), contrib, fact);
+      info =
+          factor_front_matrix_cholesky(ks, fully_summed, front_size, front_vars,
+                                       node.F.data(), contrib, fact);
     } else {
       if (fully_summed < front_size) {
         info = factor_front_matrix_block(ks, fully_summed, front_size,
-                                         front_vars, F.data(), block_size,
-                                         W.data(), contrib, fact);
+                                         front_vars, node.F.data(), block_size,
+                                         node.W.data(), contrib, fact);
       } else {
-        info = factor_root_matrix(ks, front_size, front_vars, F.data(), fact);
+        info =
+            factor_root_matrix(ks, front_size, front_vars, node.F.data(), fact);
       }
     }
 
     // Reset the front variables
     reset_front_vars(fully_summed, front_size, front_vars, front_indices);
 
-    pool.return_front_matrix(std::move(F));
-    pool.return_work_matrix(std::move(W));
-    pool.return_vars(std::move(front_vars_));
-    pool.return_indices(std::move(front_indices_));
+    pool.return_node(std::move(node));
 
-    return 0;
+    return info;
   }
 
   /**
