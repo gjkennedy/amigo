@@ -413,7 +413,7 @@ class SparseLDL {
     std::vector<int> borrow_vars() {
       std::lock_guard<std::mutex> lock(vars_mtx);
       if (vars_pool.empty()) {
-        return std::vector<int>(ncols);
+        return std::vector<int>();
       }
       auto buf = std::move(vars_pool.back());
       vars_pool.pop_back();
@@ -427,7 +427,7 @@ class SparseLDL {
     std::vector<int> borrow_indices() {
       std::lock_guard<std::mutex> lock(index_mtx);
       if (index_pool.empty()) {
-        return std::vector<int>(ncols, -1);
+        return std::vector<int>();
       }
       auto buf = std::move(index_pool.back());
       index_pool.pop_back();
@@ -441,7 +441,7 @@ class SparseLDL {
     std::vector<T> borrow_front_matrix() {
       std::lock_guard<std::mutex> lock(front_mtx);
       if (front_pool.empty()) {
-        return std::vector<T>(min_front_dim * min_front_dim);
+        return std::vector<T>();
       }
       auto buf = std::move(front_pool.back());
       front_pool.pop_back();
@@ -455,7 +455,7 @@ class SparseLDL {
     std::vector<T> borrow_work_matrix() {
       std::lock_guard<std::mutex> lock(work_mtx);
       if (work_pool.empty()) {
-        return std::vector<T>(min_front_dim * block_size);
+        return std::vector<T>();
       }
       auto buf = std::move(work_pool.back());
       work_pool.pop_back();
@@ -664,8 +664,14 @@ class SparseLDL {
 
     // Get the front variable arrays from the resource pool
     std::vector<int> front_vars_ = pool.borrow_vars();
-    int* front_vars = front_vars_.data();
+    if (front_vars_.size() < ncols) {
+      front_vars_.resize(ncols);
+    }
     std::vector<int> front_indices_ = pool.borrow_indices();
+    if (front_indices_.size() < ncols) {
+      front_indices_.resize(ncols, -1);
+    }
+    int* front_vars = front_vars_.data();
     int* front_indices = front_indices_.data();
 
     // Get the frontal variables
