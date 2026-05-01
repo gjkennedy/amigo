@@ -201,184 +201,24 @@ class SparseLDL {
   }
 
  private:
-  //  T* allocate(size_t n) {
-  //         size_t start = offset.fetch_add(n); // Atomic increment is very
-  //         fast if (start + n > total_capacity) throw std::bad_alloc(); return
-  //         &storage[start];
-  //     }
-
   /**
-   * @brief Thread-safe memory pool to store the factorization
+   * @brief Memory slab that is local to each thread
+   *
+   * @tparam R Type of the allocated memory
    */
-  // template <typename R>
-  // class MemoryPool {
-  //  public:
-  //   // Default size = 8 MB
-  //   static constexpr std::size_t default_size = (1ULL << 23) / sizeof(R);
-
-  //   MemoryPool()
-  //       : current_slab_offset(0),
-  //         current_slab_start(nullptr),
-  //         current_slab_cap(0) {}
-
-  //   void reset(std::size_t init_capacity_) {
-  //     slabs.clear();
-
-  //     slabs.emplace_back(init_capacity_);
-  //     MemorySlab& s = slabs.back();
-  //     current_slab_offset.store(0);
-  //     current_slab_start.store(s.start);
-  //     current_slab_cap.store(s.capacity);
-  //   }
-
-  //   R* allocate(std::size_t n) {
-  //     // Round up n for alignment
-  //     n = (n + 7) & ~std::size_t(7);
-
-  //     // Claim a ticket
-  //     std::size_t ticket = current_slab_offset.fetch_add(n);
-
-  //     // Check if our ticket fits in the current slab
-  //     if (ticket + n <= current_slab_cap.load(std::memory_order_acquire)) {
-  //       return current_slab_start.load(std::memory_order_acquire) + ticket;
-  //     }
-
-  //     // We need a new slab.
-  //     return allocate_new_slab(n);
-  //   }
-
-  //  private:
-  //   R* allocate_new_slab(size_t n) {
-  //     std::lock_guard<std::mutex> lock(growth_mtx);
-
-  //     // Re-check: Did someone else add a slab while waiting for the lock?
-  //     // Look at the offset and capacity of the latest slab.
-  //     if (current_slab_offset.load() + n <= current_slab_cap.load()) {
-  //       std::size_t ticket = current_slab_offset.fetch_add(n);
-  //       return current_slab_start.load() + ticket;
-  //     }
-
-  //     // Create new slab
-  //     std::size_t actual_size = std::max(default_size, n);
-  //     slabs.emplace_back(actual_size);
-  //     MemorySlab& s = slabs.back();
-
-  //     // Reset the ticket counter
-  //     current_slab_start.store(s.start);
-  //     current_slab_cap.store(s.capacity);
-  //     current_slab_offset.store(n);
-
-  //     return s.start;
-  //   }
-
-  //  private:
-  //   class MemorySlab {
-  //    public:
-  //     MemorySlab(std::size_t n) : data(n), capacity(n) { start = data.data();
-  //     }
-
-  //     std::vector<R> data;
-  //     std::size_t capacity;
-  //     R* start;
-  //   };
-
-  //   // Protected pointers into the current slab
-  //   std::atomic<size_t> current_slab_offset;
-  //   std::atomic<R*> current_slab_start;
-  //   std::atomic<size_t> current_slab_cap;
-
-  //   // Current and past memory slabs
-  //   std::deque<MemorySlab> slabs;
-
-  //   // Mutex to guard new slab creation
-  //   std::mutex growth_mtx;
-  // };
-
-  // template <typename R>
-  // class MemoryPool {
-  //  public:
-  //   static constexpr std::size_t default_size = (1ULL << 23) / sizeof(R);
-
-  //   MemoryPool() = default;
-
-  //   void reset(std::size_t init_capacity) {
-  //     std::lock_guard<std::mutex> lock(growth_mtx);
-
-  //     slabs.clear();
-  //     slabs.emplace_back(init_capacity);
-
-  //     current.store(&slabs.back(), std::memory_order_release);
-  //   }
-
-  //   R* allocate(std::size_t n) {
-  //     n = (n + 7) & ~std::size_t(7);
-
-  //     MemorySlab* slab = current.load(std::memory_order_acquire);
-
-  //     if (slab) {
-  //       std::size_t ticket =
-  //           slab->offset.fetch_add(n, std::memory_order_relaxed);
-
-  //       if (ticket + n <= slab->capacity) {
-  //         return slab->start + ticket;
-  //       }
-  //     }
-
-  //     return allocate_new_slab(n);
-  //   }
-
-  //  private:
-  //   struct MemorySlab {
-  //     explicit MemorySlab(std::size_t n)
-  //         : data(n), capacity(n), start(data.data()), offset(0) {}
-
-  //     std::vector<R> data;
-  //     std::size_t capacity;
-  //     R* start;
-  //     std::atomic<std::size_t> offset;
-  //   };
-
-  //   R* allocate_new_slab(std::size_t n) {
-  //     std::lock_guard<std::mutex> lock(growth_mtx);
-
-  //     MemorySlab* slab = current.load(std::memory_order_relaxed);
-
-  //     if (slab) {
-  //       std::size_t old = slab->offset.load(std::memory_order_relaxed);
-
-  //       while (old + n <= slab->capacity) {
-  //         if (slab->offset.compare_exchange_weak(old, old + n,
-  //                                                std::memory_order_relaxed,
-  //                                                std::memory_order_relaxed))
-  //                                                {
-  //           return slab->start + old;
-  //         }
-  //       }
-  //     }
-
-  //     std::size_t actual_size = std::max(default_size, n);
-  //     slabs.emplace_back(actual_size);
-
-  //     MemorySlab* s = &slabs.back();
-  //     s->offset.store(n, std::memory_order_relaxed);
-
-  //     current.store(s, std::memory_order_release);
-
-  //     return s->start;
-  //   }
-
-  //   std::deque<MemorySlab> slabs;
-  //   std::atomic<MemorySlab*> current{nullptr};
-  //   std::mutex growth_mtx;
-  // };
-
   template <typename R>
-  class ThreadLocalPool {
+  class ThreadLocalMemorySlab {
    public:
+    // default size is 8 MB
     static constexpr std::size_t default_size = (1ULL << 23) / sizeof(R);
 
-    ThreadLocalPool() = default;
+    ThreadLocalMemorySlab() = default;
 
+    /**
+     * @brief Reset the capacity
+     *
+     * @param init_capacity The initial capacity of the slab
+     */
     void reset(std::size_t init_capacity = default_size) {
       slabs.clear();
       slabs.emplace_back(std::max(init_capacity, default_size));
@@ -386,6 +226,12 @@ class SparseLDL {
       offset = 0;
     }
 
+    /**
+     * @brief Allocate the next chunk of memory
+     *
+     * @param n Size of the request
+     * @return R* New memory locations
+     */
     R* allocate(std::size_t n) {
       // Round up to multiple of 8 entries
       n = (n + 7) & ~std::size_t(7);
@@ -431,7 +277,7 @@ class SparseLDL {
     void reset(std::size_t init_capacity) {
       std::size_t capacity = init_capacity;
 #ifdef AMIGO_USE_OPENMP
-      capacity = std::size_t(1.2 * init_capacity) / omp_get_max_threads();
+      capacity = std::size_t(init_capacity / omp_get_max_threads());
 #endif
       for (auto& pool : pools) {
         pool.reset(capacity);
@@ -447,7 +293,7 @@ class SparseLDL {
     }
 
    private:
-    std::vector<ThreadLocalPool<R>> pools;
+    std::vector<ThreadLocalMemorySlab<R>> pools;
   };
 
   /**
@@ -694,7 +540,13 @@ class SparseLDL {
       std::vector<T> W;
     };
 
-    ResourcePool() {}
+    ResourcePool() {
+#ifdef AMIGO_USE_OPENMP
+      pools.resize(omp_get_max_threads());
+#else
+      pools.resize(1);
+#endif
+    }
 
     /**
      * @brief Borrow a resource node allocated for forming and factoring a
@@ -703,12 +555,15 @@ class SparseLDL {
      * @return ResourceNode
      */
     ResourceNode borrow_node() {
-      std::lock_guard<std::mutex> lock(mtx);
-      if (pool.empty()) {
+      int tid = 0;
+#ifdef AMIGO_USE_OPENMP
+      tid = omp_get_thread_num();
+#endif
+      if (pools[tid].empty()) {
         return ResourceNode{};
       }
-      auto buf = std::move(pool.back());
-      pool.pop_back();
+      auto buf = std::move(pools[tid].back());
+      pools[tid].pop_back();
       return buf;
     }
 
@@ -718,44 +573,17 @@ class SparseLDL {
      * @param buf Resource return node (use std::move()!)
      */
     void return_node(ResourceNode&& buf) {
-      std::lock_guard<std::mutex> lock(mtx);
-      pool.push_back(std::move(buf));
+      int tid = 0;
+#ifdef AMIGO_USE_OPENMP
+      tid = omp_get_thread_num();
+#endif
+      pools[tid].push_back(std::move(buf));
     }
 
    private:
     // Variables allocated per thread
-    std::mutex mtx;
-    std::vector<ResourceNode> pool;
+    std::vector<std::vector<ResourceNode>> pools;
   };
-
-  //   class ResourcePool {
-  //    public:
-  //     struct ResourceNode {
-  //       std::vector<int> vars;
-  //       std::vector<int> indices;
-  //       std::vector<T> F;
-  //       std::vector<T> W;
-  //     };
-
-  //     ResourcePool() {
-  // #ifdef AMIGO_USE_OPENMP
-  //       nodes.resize(omp_get_max_threads());
-  // #else
-  //       nodes.resize(1);
-  // #endif
-  //     }
-
-  //     ResourceNode& get_node() {
-  // #ifdef AMIGO_USE_OPENMP
-  //       return nodes[omp_get_thread_num()];
-  // #else
-  //       return nodes[0];
-  // #endif
-  //     }
-
-  //    private:
-  //     std::vector<ResourceNode> nodes;
-  //   };
 
   /**
    * @brief The contribution stack object used for the factorization
@@ -921,11 +749,16 @@ class SparseLDL {
     // Use estimates of the contribution
     ContributionData contrib(num_snodes);
 
+    // The factorization where data is stored
+    MatrixFactor& factor = fact;
+
     // Loop over all roots because we can't assume that the matrix is
     // irreducible. Any root nodes are appended at the end of the snode_children
     // array. The snode_children_ptr array is of length num_snodes + 2 and roots
     // are stored in snode_children between snode_children_ptr[num_snodes] and
     // snode_children_ptr[num_snodes + 1].
+    int nroots =
+        snode_children_ptr[num_snodes + 1] - snode_children_ptr[num_snodes];
     for (int is = snode_children_ptr[num_snodes];
          is < snode_children_ptr[num_snodes + 1]; is++) {
       int root = snode_children[is];
@@ -937,21 +770,26 @@ class SparseLDL {
 #pragma omp single
 #endif  // AMIGO_USE_OPENMP
         {
-          int info = factor_numeric_node_task<stype>(root, ncols, colp, rows,
-                                                     data, contrib, pool, fact);
+#ifdef AMIGO_USE_OPENMP
+#pragma task firstprivate(nroots) \
+    shared(colp, rows, data, contrib, pool, factor) if (nroots > 1)
+#endif
+          {
+            int info = factor_numeric_node_task<stype>(
+                root, ncols, colp, rows, data, contrib, pool, factor);
+          }
         }
       }
     }
 
-    // // Reset the estimates for the non-zeros
-    // std::size_t int_nnz, factor_nnz;
-    // fact.get_num_nonzeros(&int_nnz, &factor_nnz);
+    // Reset the estimates for the non-zeros
+    std::size_t int_nnz, factor_nnz;
+    fact.get_num_nonzeros(&int_nnz, &factor_nnz);
 
-    // int_nnz = std::max(int_nnz, std::size_t(delay_growth *
-    // cholesky_int_nnz)); factor_nnz =
-    //     std::max(factor_nnz, std::size_t(delay_growth *
-    //     cholesky_factor_nnz));
-    // fact.set_sizes(num_snodes, int_nnz, factor_nnz);
+    int_nnz = std::max(int_nnz, std::size_t(delay_growth * cholesky_int_nnz));
+    factor_nnz =
+        std::max(factor_nnz, std::size_t(delay_growth * cholesky_factor_nnz));
+    fact.set_sizes(num_snodes, int_nnz, factor_nnz);
 
     return 0;
   }
@@ -982,7 +820,6 @@ class SparseLDL {
 
     // Get the front variable arrays from the resource pool
     auto node = pool.borrow_node();
-    // auto node = pool.get_node();
     if (node.vars.size() < ncols) {
       node.vars.resize(ncols);
     }
@@ -1033,11 +870,12 @@ class SparseLDL {
                                          front_vars, node.F.data(), nblock,
                                          node.W.data(), contrib, factor);
       } else {
-        // #ifdef AMIGO_USE_OPENMP
-        // #pragma omp task
-        // #endif  // AMIGO_USE_OPENMP
+#if defined(AMIGO_USE_OPENMP) && \
+    (defined(AMIGO_USE_MKL) || defined(AMIGO_USE_OPENBLAS))
+#pragma omp task shared(colp, rows, data, contrib, pool, factor)
+#endif  // AMIGO_USE_OPENMP
         {
-          // BlasRootFactorThreadScope blas_threads(front_size);
+          BlasRootFactorThreadScope blas_threads(front_size);
           info = factor_root_matrix(ks, front_size, front_vars, node.F.data(),
                                     factor);
         }
