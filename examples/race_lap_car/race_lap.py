@@ -346,9 +346,9 @@ args = parser.parse_args()
 
 model = create_racecar_model(num_intervals=num_intervals, ds=ds)
 if args.build:
-    model.build_module(source_dir=Path(__file__).resolve().parent)
+    model.build_module()
 
-model.initialize(order_type=am.OrderingType.NESTED_DISSECTION)
+model.initialize()
 print(f"Variables: {model.num_variables}, Constraints: {model.num_constraints}")
 
 # Curvature data
