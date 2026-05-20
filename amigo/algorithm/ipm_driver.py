@@ -11,6 +11,7 @@ import time
 import numpy as np
 
 from ..model import ModelVector
+from ..amigo import OptVarType
 
 from .default_options import get_default_options
 from .filter_acceptance import Filter
@@ -145,17 +146,17 @@ class Optimizer(
         state.res_norm_mu = self.barrier_param
 
         # Inertia corrector + zero-Hessian indices
-        problem_ref = self.mpi_problem if self.distribute else self.problem
-        mult_ind = np.array(problem_ref.get_multiplier_indicator(), dtype=bool)
-        self._mult_ind = mult_ind  # used by _ensure_positive_slacks
+        # problem_ref = self.mpi_problem if self.distribute else self.problem
+        # mult_ind = np.array(problem_ref.get_multiplier_indicator(), dtype=bool)
+        # self._mult_ind = mult_ind  # used by _ensure_positive_slacks
         inertia_corrector = self._build_inertia_corrector(
-            mult_ind, tol, options, comm_rank
+            var_types, tol, options, comm_rank
         )
         zero_hessian_indices, zero_hessian_eps = self._zero_hessian_indices(
             options, comm_rank
         )
 
-        soc_mult_ind = mult_ind if options["second_order_correction"] else None
+        soc_var_types = var_types if options["second_order_correction"] else None
 
         # Barrier-strategy step context (shared across iterations; per-iteration
         # fields i, res_norm, diag_base, filter_monotone_* are updated in-loop)
@@ -163,7 +164,7 @@ class Optimizer(
             comm_rank=comm_rank,
             tol=tol,
             compl_inf_tol=compl_inf_tol,
-            mult_ind=mult_ind,
+            mult_ind=var_types,
             x=x,
             inertia_corrector=inertia_corrector,
             zero_hessian_indices=zero_hessian_indices,
@@ -190,8 +191,15 @@ class Optimizer(
         watchdog.trigger = options["watchdog_shortened_iter_trigger"]
         watchdog.max_trials = options["watchdog_trial_iter_max"]
 
+        # Create vectors for the primal or dual variables only
+        primal_vec = self.problem.create_primal_vector()
+        con_vec = self.problem.create_constraint_vector()
+
         # Main loop
         for i in range(max_iters):
+            primal_indices = self.problem.get_primal_indices()
+            con_indices = self.problem.get_constraint_indices()
+
             # Step A: KKT residual
             res_norm = self.optimizer.compute_residual(
                 self.barrier_param, self.vars, self.grad, self.res
@@ -200,9 +208,14 @@ class Optimizer(
             if inertia_corrector:
                 inertia_corrector.update_barrier(self.barrier_param)
 
-            res_arr = np.array(self.res.get_array())
-            theta_res = np.linalg.norm(res_arr[mult_ind])
-            eta_res = np.linalg.norm(res_arr[~mult_ind])
+            self.res.get_values_at(con_indices, con_vec)
+            self.res.get_values_at(primal_indices, primal_vec)
+            theta_res = self.problem.norm(con_vec)
+            eta_res = self.problem.norm(primal_vec)
+
+            # res_arr = np.array(self.res.get_array())
+            # theta_res = np.linalg.norm(res_arr[mult_ind])
+            # eta_res = np.linalg.norm(res_arr[~mult_ind])
 
             if filter_ls and self._filter_theta_0 is None:
                 self._filter_theta_0 = self._compute_filter_theta()
@@ -227,7 +240,6 @@ class Optimizer(
                 filter_ls,
                 outer_filter,
                 options,
-                mult_ind,
             )
             if comm_rank == 0:
                 self.write_log(i, iter_data)

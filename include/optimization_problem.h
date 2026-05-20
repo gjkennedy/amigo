@@ -15,11 +15,11 @@ namespace amigo {
  * @brief Optimization variable types
  */
 enum class OptVarType : int {
-  FIXED = 0,            // Variable is treated as fixed
-  PRIMAL = 1,           // Primal variable value
-  SLACK = 2,            // Slack variable
-  DUAL_INEQUALITY = 3,  // Dual variable for an inequality
-  DUAL_EQUALITY = 4     // Dual variable for an equality
+  FIXED = 1 << 1,            // Variable is treated as fixed
+  PRIMAL = 1 << 2,           // Primal variable value
+  SLACK = 1 << 3,            // Slack variable
+  DUAL_INEQUALITY = 1 << 4,  // Dual variable for an inequality
+  DUAL_EQUALITY = 1 << 5     // Dual variable for an equality
 };
 
 template <typename T, ExecPolicy policy>
@@ -66,6 +66,9 @@ class OptimizationProblem {
     if (!var_types) {
       var_types = std::make_shared<Vector<int>>(var_owners->get_local_size(),
                                                 var_owners->get_ext_size());
+    } else {
+      // Initialize the primal and constraint vectors
+      initialize_primal_and_constraints();
     }
 
     // If no inital or lower/upper bounds are set, create them. These values
@@ -144,6 +147,68 @@ class OptimizationProblem {
    * @return MPI_Comm
    */
   MPI_Comm get_mpi_comm() { return comm; }
+
+  /**
+   * @brief Compute the dot product
+   *
+   * @param a Vector a
+   * @param b Vector b
+   * @return Dot product between a and b
+   */
+  T dot(std::shared_ptr<Vector<T>> a, std::shared_ptr<Vector<T>> b) {
+    T local = a->dot(b);
+    T global = 0.0;
+    MPI_Allreduce(&local, &global, 1, get_mpi_type<T>(), MPI_SUM, comm);
+    return global;
+  }
+
+  /**
+   * @brief Compute the l2 norm of the vector
+   *
+   * @param a  The input vector
+   * @return T The norm of the vecttor
+   */
+  T norm(std::shared_ptr<Vector<T>> a) { return std::sqrt(dot(a, a)); }
+
+  /**
+   * @brief Compute the maximum absolute value in the vector
+   *
+   * @param a The input vector
+   * @param index The index of the max absolute value
+   * @return T The max absolute value
+   */
+  T maxabs(std::shared_ptr<Vector<T>> a, int& index) {
+    int mpi_rank;
+    MPI_Comm_rank(comm, &mpi_rank);
+
+    // Find the local max
+    int local_index = -1;
+    T local_value = a->maxabs(local_index);
+
+    // Convert to global index
+    const int* range = var_owners->get_range();
+    int global_local_index = local_index + range[mpi_rank];
+
+    struct {
+      T value;
+      int index;
+    } local{local_value, global_local_index}, global{};
+
+    MPI_Datatype mpi_pair_type;
+    if constexpr (std::is_same_v<T, double>) {
+      mpi_pair_type = MPI_DOUBLE_INT;
+    } else if constexpr (std::is_same_v<T, float>) {
+      mpi_pair_type = MPI_FLOAT_INT;
+    } else {
+      static_assert(std::is_same_v<T, double> || std::is_same_v<T, float>,
+                    "maxabs currently supports only float or double");
+    }
+
+    MPI_Allreduce(&local, &global, 1, mpi_pair_type, MPI_MAXLOC, comm);
+
+    index = global.index;
+    return global.value;
+  }
 
   /**
    * @brief Get the num variables that are owned by this processor
@@ -229,6 +294,77 @@ class OptimizationProblem {
    */
   const std::shared_ptr<const Vector<int>> get_var_types() const {
     return var_types;
+  }
+
+  /**
+   * @brief Get the indices that correspond to the specified types
+   *
+   * @param mask Mask type
+   * @param loc Location of where the memory should go
+   * @return std::shared_ptr<Vector<int>> with the specified indices
+   */
+  std::shared_ptr<Vector<int>> get_indices_with_type(const int mask,
+                                                     MemoryLocation loc) const {
+    const Vector<int>& vtypes = *var_types;
+
+    // Count up the sizes
+    int count = 0;
+    for (int i = 0; i < vtypes.get_local_size(); i++) {
+      int type = static_cast<int>(vtypes[i]);
+      if (type & mask) {
+        count++;
+      }
+    }
+
+    std::shared_ptr<Vector<int>> indices =
+        std::make_shared<Vector<int>>(count, 0, loc);
+    for (int i = 0, k = 0; i < vtypes.get_local_size(); i++) {
+      int type = static_cast<int>(vtypes[i]);
+      if (type & mask) {
+        (*indices)[k] = i;
+        k++;
+      }
+    }
+
+    return indices;
+  }
+
+  /**
+   * @brief Get the primal indices
+   */
+  std::shared_ptr<Vector<int>> get_primal_indices() { return primal_indices; }
+
+  /**
+   * @brief Get the indices associated with the constraints
+   */
+  std::shared_ptr<Vector<int>> get_constraint_indices() {
+    return constraint_indices;
+  }
+
+  /**
+   * @brief Create a local vector consistent with the primal variables
+   */
+  std::shared_ptr<Vector<T>> create_primal_vector() {
+    // Set the memory location depending on the execution policy
+    MemoryLocation loc = MemoryLocation::HOST_ONLY;
+    if (policy == ExecPolicy::CUDA) {
+      loc = MemoryLocation::HOST_AND_DEVICE;
+    }
+    return std::make_shared<Vector<T>>(primal_indices->get_local_size(), 0,
+                                       loc);
+  }
+
+  /**
+   * @brief Create a local vector consistent with the constraints
+   */
+  std::shared_ptr<Vector<T>> create_constraint_vector() {
+    // Set the memory location depending on the execution policy
+    MemoryLocation loc = MemoryLocation::HOST_ONLY;
+    if (policy == ExecPolicy::CUDA) {
+      loc = MemoryLocation::HOST_AND_DEVICE;
+    }
+    return std::make_shared<Vector<T>>(constraint_indices->get_local_size(), 0,
+                                       loc);
   }
 
   /**
@@ -448,6 +584,9 @@ class OptimizationProblem {
     scatter_vector(x_init, opt, opt->x_init, root, distribute);
     scatter_vector(lower, opt, opt->lower, root, distribute);
     scatter_vector(upper, opt, opt->upper, root, distribute);
+
+    // Now, initialize the primal and dual constraints
+    opt->initialize_primal_and_constraints();
 
     return opt;
   }
@@ -722,7 +861,7 @@ class OptimizationProblem {
       // TODO: Need to fix for parallel computations
       int num_fixed = 0;
       int* t_array = var_types->get_array();
-      for (int i = 0; var_types->get_local_size(); i++) {
+      for (int i = 0; i < var_types->get_local_size(); i++) {
         if (t_array[i] == static_cast<int>(OptVarType::FIXED)) {
           num_fixed++;
         }
@@ -734,7 +873,7 @@ class OptimizationProblem {
         std::shared_ptr<Vector<int>> fixed_dof =
             std::make_shared<Vector<int>>(num_fixed, 0, mem_loc);
         int* dof_array = fixed_dof->get_array();
-        for (int i = 0, n = 0; var_types->get_local_size(); i++) {
+        for (int i = 0, n = 0; i < var_types->get_local_size(); i++) {
           if (t_array[i] == static_cast<int>(OptVarType::FIXED)) {
             dof_array[n] = i;
             n++;
@@ -1173,6 +1312,31 @@ class OptimizationProblem {
 
  private:
   /**
+   * @brief Compute the primal and constraint indices
+   *
+   */
+  void initialize_primal_and_constraints() {
+    // Set the memory location depending on the execution policy
+    MemoryLocation loc = MemoryLocation::HOST_ONLY;
+    if (policy == ExecPolicy::CUDA) {
+      loc = MemoryLocation::HOST_AND_DEVICE;
+    }
+
+    // Variable types are initialized, set the primal variables
+    int primal_mask = static_cast<int>(OptVarType::PRIMAL) |
+                      static_cast<int>(OptVarType::SLACK) |
+                      static_cast<int>(OptVarType::FIXED);
+    primal_indices = get_indices_with_type(primal_mask, loc);
+    primal_indices->copy_host_to_device();
+
+    // Find the dual variables
+    int dual_mask = static_cast<int>(OptVarType::DUAL_INEQUALITY) |
+                    static_cast<int>(OptVarType::DUAL_EQUALITY);
+    constraint_indices = get_indices_with_type(dual_mask, loc);
+    constraint_indices->copy_host_to_device();
+  }
+
+  /**
    * @brief Create a functor that returns the number of nodes and node
    * numbers, given an element index
    *
@@ -1417,6 +1581,10 @@ class OptimizationProblem {
 
   // The shared data vector
   std::shared_ptr<Vector<T>> data_vec;
+
+  // Local indices of the primal and constraint variables
+  std::shared_ptr<Vector<int>> primal_indices;
+  std::shared_ptr<Vector<int>> constraint_indices;
 
   // Node numbers created by
   std::shared_ptr<Vector<int>> dist_node_numbers;

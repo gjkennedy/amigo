@@ -293,6 +293,7 @@ void compute_diagonal(const OptProblemInfo<T>& p, OptState<const T>& s,
     if (!std::isinf(p.ubx[i])) sigma += s.zu[i] / s.su[i];
     diag[idx] = sigma;
   }
+
   for (int j = 0; j < p.num_constraints; j++) {
     diag[p.constraint_indices[j]] = T(0);
   }
@@ -471,6 +472,7 @@ void compute_kkt_error(T mu, const OptProblemInfo<T>& p, OptState<const T>& s,
     if (!std::isinf(p.ubx[i]))
       comp = A2D::max2(comp, std::abs(s.su[i] * s.zu[i] - mu));
   }
+
   for (int j = 0; j < p.num_constraints; j++) {
     int idx = p.constraint_indices[j];
     primal = A2D::max2(primal, std::abs(grad[idx] - p.lbh[j]));

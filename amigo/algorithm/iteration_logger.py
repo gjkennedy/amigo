@@ -28,7 +28,6 @@ class IterationLogger:
         filter_ls,
         outer_filter,
         options,
-        mult_ind,
     ):
         """Assemble the dict of per-iteration diagnostics for logging/history."""
         iter_data = {

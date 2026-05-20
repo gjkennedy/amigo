@@ -24,14 +24,15 @@ class OptVector {
   OptVector(int num_primal, int num_constraints, std::shared_ptr<Vector<T>> x)
       : num_primal(num_primal), num_constraints(num_constraints), x(x) {
     // Create the slack and dual variable vectors for the upper and lower bounds
-    sl = std::make_shared<Vector<T>>(num_primal, 0, x->get_memory_location());
-    su = std::make_shared<Vector<T>>(num_primal, 0, x->get_memory_location());
-    zl = std::make_shared<Vector<T>>(num_primal, 0, x->get_memory_location());
-    zu = std::make_shared<Vector<T>>(num_primal, 0, x->get_memory_location());
+    MemoryLocation loc = x->get_memory_location();
+
+    sl = std::make_shared<Vector<T>>(num_primal, 0, loc);
+    su = std::make_shared<Vector<T>>(num_primal, 0, loc);
+    zl = std::make_shared<Vector<T>>(num_primal, 0, loc);
+    zu = std::make_shared<Vector<T>>(num_primal, 0, loc);
   }
 
   void zero() {
-    x->zero();
     sl->zero();
     su->zero();
     zl->zero();
@@ -46,10 +47,16 @@ class OptVector {
     zu->copy(*src->zu);
   }
 
+  int get_num_primal() const { return num_primal; }
+  int get_num_constraints() const { return num_constraints; }
+
+  std::shared_ptr<Vector<T>> get_solution() { return x; }
   std::shared_ptr<Vector<T>> get_zl() { return zl; }
   std::shared_ptr<Vector<T>> get_zu() { return zu; }
   std::shared_ptr<Vector<T>> get_sl() { return sl; }
   std::shared_ptr<Vector<T>> get_su() { return su; }
+
+  const std::shared_ptr<Vector<T>> get_solution() const { return x; }
 
   template <ExecPolicy policy>
   void get_bound_duals(T** zl_, T** zu_) {
@@ -98,12 +105,6 @@ class OptVector {
     return x->template get_array<policy>();
   }
 
-  std::shared_ptr<Vector<T>> get_solution() { return x; }
-  const std::shared_ptr<Vector<T>> get_solution() const { return x; }
-
-  int get_num_primal() const { return num_primal; }
-  int get_num_constraints() const { return num_constraints; }
-
  private:
   int num_primal, num_constraints;
 
@@ -134,21 +135,11 @@ class InteriorPointOptimizer {
     const Vector<T>& lb = *problem->get_lower();
     const Vector<T>& ub = *problem->get_upper();
 
-    num_primal = 0;
-    num_constraints = 0;
+    primal_indices = problem->get_primal_indices();
+    num_primal = primal_indices->get_local_size();
 
-    // Count up the number of primal variables and number of constraints/dual
-    // variables. Note that the number of primal and constraints will not sum
-    // up to the number of variables since variables may also be FIXED!
-    for (int i = 0; i < size; i++) {
-      if (vtypes[i] == static_cast<int>(OptVarType::PRIMAL) ||
-          vtypes[i] == static_cast<int>(OptVarType::SLACK)) {
-        num_primal++;
-      } else if (vtypes[i] == static_cast<int>(OptVarType::DUAL_EQUALITY) ||
-                 vtypes[i] == static_cast<int>(OptVarType::DUAL_INEQUALITY)) {
-        num_constraints++;
-      }
-    }
+    constraint_indices = problem->get_constraint_indices();
+    num_constraints = constraint_indices->get_local_size();
 
     // Set the memory location depending on the execution policy
     MemoryLocation loc = MemoryLocation::HOST_ONLY;
@@ -156,35 +147,21 @@ class InteriorPointOptimizer {
       loc = MemoryLocation::HOST_AND_DEVICE;
     }
 
-    // Make the vectors that contain the indices of the primal values and
-    // constraints
-    primal_indices = std::make_shared<Vector<int>>(num_primal, 0, loc);
-    constraint_indices = std::make_shared<Vector<int>>(num_constraints, 0, loc);
-
     lbx = std::make_shared<Vector<T>>(num_primal, 0, loc);
     ubx = std::make_shared<Vector<T>>(num_primal, 0, loc);
-    lbh = std::make_shared<Vector<T>>(num_constraints, 0, loc);
-
-    for (int i = 0, primal = 0, con = 0; i < size; i++) {
-      if (vtypes[i] == static_cast<int>(OptVarType::PRIMAL) ||
-          vtypes[i] == static_cast<int>(OptVarType::SLACK)) {
-        (*constraint_indices)[con] = i;
-        (*lbh)[con] = lb[i];
-        con++;
-      } else if (vtypes[i] == static_cast<int>(OptVarType::DUAL_EQUALITY) ||
-                 vtypes[i] == static_cast<int>(OptVarType::DUAL_INEQUALITY)) {
-        (*primal_indices)[primal] = i;
-        (*lbx)[primal] = lb[i];
-        (*ubx)[primal] = ub[i];
-        primal++;
-      }
+    for (int i = 0; i < num_primal; i++) {
+      int idx = (*primal_indices)[i];
+      (*lbx)[i] = lb[idx];
+      (*ubx)[i] = ub[idx];
     }
-
-    // Copy the variable information to the device
-    primal_indices->copy_host_to_device();
-    constraint_indices->copy_host_to_device();
     lbx->copy_host_to_device();
     ubx->copy_host_to_device();
+
+    lbh = std::make_shared<Vector<T>>(num_constraints, 0, loc);
+    for (int i = 0; i < num_constraints; i++) {
+      int idx = (*constraint_indices)[i];
+      (*lbh)[i] = lb[idx];
+    }
     lbh->copy_host_to_device();
 
     // Set the host/device pointers into the info
@@ -195,7 +172,26 @@ class InteriorPointOptimizer {
     info.lbx = lbx->template get_array<policy>();
     info.ubx = ubx->template get_array<policy>();
     info.lbh = lbh->template get_array<policy>();
+
+    // Add up the total number of constraints
+    MPI_Allreduce(&num_primal, &num_global_primal, 1, MPI_INT, MPI_SUM, comm);
+    MPI_Allreduce(&num_constraints, &num_global_constraints, 1, MPI_INT,
+                  MPI_SUM, comm);
   }
+
+  /**
+   * @brief Get the number of primal variables
+   *
+   * @return int
+   */
+  int get_num_primal() const { return num_global_primal; }
+
+  /**
+   * @brief Get the number of duals/constraints
+   *
+   * @return int
+   */
+  int get_num_constraints() const { return num_global_constraints; }
 
   /**
    * @brief Create an instance of the optimization state vector
@@ -216,86 +212,6 @@ class InteriorPointOptimizer {
   std::shared_ptr<OptVector<T>> create_opt_vector(
       std::shared_ptr<Vector<T>> x) const {
     return std::make_shared<OptVector<T>>(num_primal, num_constraints, x);
-  }
-
-  /**
-   * @brief Set the multiplier/dual varaibles to the specified value
-   *
-   * @param value Value to place into the multiplier components
-   * @param x Vector
-   */
-  void set_dual_values(T value, std::shared_ptr<Vector<T>> x) const {
-    T* x_array = x->template get_array<policy>();
-    if constexpr (policy == ExecPolicy::SERIAL ||
-                  policy == ExecPolicy::OPENMP) {
-      detail::set_dual_values(info, value, x_array);
-    }
-#ifdef AMIGO_USE_CUDA
-    else {
-      detail::set_dual_values(info, value, x_array);
-    }
-#endif
-  }
-
-  /**
-   * @brief Set the design variables to the specified value
-   *
-   * @param value Value to place into the design variable components
-   * @param x Vector
-   */
-  void set_primal_values(T value, std::shared_ptr<Vector<T>> x) const {
-    T* x_array = x->template get_array<policy>();
-    if constexpr (policy == ExecPolicy::SERIAL ||
-                  policy == ExecPolicy::OPENMP) {
-      detail::set_primal_values(info, value, x_array);
-    }
-#ifdef AMIGO_USE_CUDA
-    else {
-      detail::set_primal_values_cuda(info, value, x_array);
-    }
-#endif
-  }
-
-  /**
-   * @brief Copy only the duals/multipliers from the src to the dest vector
-   *
-   * @param dest Destination vector
-   * @param src Source vector
-   */
-  void copy_duals(std::shared_ptr<Vector<T>> dest,
-                  std::shared_ptr<Vector<T>> src) const {
-    if constexpr (policy == ExecPolicy::SERIAL ||
-                  policy == ExecPolicy::OPENMP) {
-      detail::copy_duals(info, src->template get_array<policy>(),
-                         dest->template get_array<policy>());
-    }
-#ifdef AMIGO_USE_CUDA
-    else {
-      detail::copy_duals_cuda(info, src->template get_array<policy>(),
-                              dest->template get_array<policy>());
-    }
-#endif
-  }
-
-  /**
-   * @brief Copy only the design variables from the src to the dest vector
-   *
-   * @param dest Destination vector
-   * @param src Source vector
-   */
-  void copy_primals(std::shared_ptr<Vector<T>> dest,
-                    std::shared_ptr<Vector<T>> src) const {
-    if constexpr (policy == ExecPolicy::SERIAL ||
-                  policy == ExecPolicy::OPENMP) {
-      detail::copy_primals(info, src->template get_array<policy>(),
-                           dest->template get_array<policy>());
-    }
-#ifdef AMIGO_USE_CUDA
-    else {
-      detail::copy_primals_cuda(info, src->template get_array<policy>(),
-                                dest->template get_array<policy>());
-    }
-#endif
   }
 
   /**
@@ -778,11 +694,11 @@ class InteriorPointOptimizer {
   T get_obj_scale() const { return obj_scale_; }
   bool has_scaling() const { return scaling_active_; }
 
-  // Accessors
-  int get_num_design_variables() const { return num_primal; }
-  int get_num_constraints() const { return num_constraints; }
-  int get_num_equalities() const { return num_constraints; }
-  int get_num_inequalities() const { return 0; }
+  // // Accessors
+  // int get_num_design_variables() const { return num_primal; }
+  // int get_num_constraints() const { return num_constraints; }
+  // int get_num_equalities() const { return num_constraints; }
+  // int get_num_inequalities() const { return 0; }
 
   std::shared_ptr<Vector<T>> get_lbx() const { return lbx; }
   std::shared_ptr<Vector<T>> get_ubx() const { return ubx; }
@@ -823,7 +739,12 @@ class InteriorPointOptimizer {
   std::shared_ptr<Vector<T>> lbx, ubx;
   std::shared_ptr<Vector<T>> lbx_relaxed, ubx_relaxed;
   std::shared_ptr<Vector<T>> lbh;
+
+  // Object for storing informabout about the problem
   detail::OptProblemInfo<T> info;
+
+  // Number of global constraints
+  int num_global_primal, num_global_constraints;
 
   // Slack-to-constraint mapping (set via set_slack_mapping)
   int n_slacks_ = 0;

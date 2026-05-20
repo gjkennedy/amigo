@@ -29,18 +29,14 @@ class IterateInitialization:
 
         # Step 2: Project design variables into bounds, initialize z = 1.0
         self._zero_multipliers(x)
-        self.optimizer.initialize_multipliers_and_slacks(
-            self.barrier_param, self.grad, self.vars
-        )
+        self.optimizer.initialize_duals_and_slacks(self.barrier_param, self.vars)
 
         # Step 3: Initialize slacks to s = d(x), then push into bounds.
         if self.optimizer.has_slacks():
             self._update_gradient(x)
             self.optimizer.initialize_slacks(self.grad, self.vars)
             x.copy_host_to_device()
-            self.optimizer.initialize_multipliers_and_slacks(
-                self.barrier_param, self.grad, self.vars
-            )
+            self.optimizer.initialize_duals_and_slacks(self.barrier_param, self.vars)
 
         # Step 4: Recompute gradient at the pushed x with lam=0
         self._update_gradient(x)

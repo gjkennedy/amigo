@@ -28,30 +28,38 @@ class MultiplierInitialization:
         Safeguard: if ||lambda||_inf > lambda_max, discard and set to 0.
         """
         x = self.vars.get_solution()
+        primal_indices = self.problem.get_primal_indices()
+        con_indices = self.problem.get_constraint_indices()
 
         # Build RHS: -(grad_f - zl + zu) for primals, 0 for constraints
         self.optimizer.compute_dual_residual_vector(self.vars, self.grad, self.res)
-        self.res.get_array()[:] *= -1.0
-        self.res.copy_host_to_device()
+        self.res.scale(-1.0)
+        # self.res.get_array()[:] *= -1.0
+        # self.res.copy_host_to_device()
 
         # Factor [I, A^T; A, 0]: W_factor=0 (no Hessian), diag=I on primals
         self.diag.zero()
-        self.optimizer.set_design_vars_value(1.0, self.diag)
-        self.diag.copy_host_to_device()
+        self.diag.fill_at(primal_indices, 1.0)
+        # self.optimizer.set_primal_values(1.0, self.diag)
+        # self.diag.copy_host_to_device()
         self.solver.factor(0.0, x, self.diag, post_hessian=self._hessian_scaling_fn)
         self.solver.solve(self.res, self.px)
 
         # Safeguard: discard if multipliers are too large
-        self.px.copy_device_to_host()
-        px_arr = self.px.get_array()
-        problem_ref = self.mpi_problem if self.distribute else self.problem
-        mult_ind = np.array(problem_ref.get_multiplier_indicator(), dtype=bool)
-        lam_vals = px_arr[mult_ind]
-        if len(lam_vals) > 0 and np.max(np.abs(lam_vals)) > lambda_max:
-            self.optimizer.set_multipliers_value(0.0, x)
-            return
+        # self.px.copy_device_to_host()
+        # px_arr = self.px.get_array()
 
-        self.optimizer.copy_multipliers(x, self.px)
+        # TODO: Fix max multiplier computation
+        # problem_ref = self.mpi_problem if self.distribute else self.problem
+        # mult_ind = np.array(problem_ref.get_multiplier_indicator(), dtype=bool)
+        # lam_vals = px_arr[mult_ind]
+
+        # Compute the max lambda value
+        # if len(lam_vals) > 0 and np.max(np.abs(lam_vals)) > lambda_max:
+        #     self.optimizer.set_dual_values(0.0, x)
+        #     return
+
+        x.copy_at(con_indices, self.px)
 
     def _compute_affine_multipliers(self, beta_min=1.0):
         """Compute the affine scaling initial point (Section 3.6).
@@ -81,7 +89,11 @@ class MultiplierInitialization:
         self.optimizer.compute_update(mu, self.vars, self.px, self.update)
 
         # Update multipliers only (y = y + dy), primals unchanged
-        self.optimizer.copy_multipliers(x, self.update.get_solution())
+        # self.optimizer.copy_multipliers(x, self.update.get_solution())
+
+        # Update multipliers only (y <- y + dy)
+        con_indices = self.problem.get_constraint_indices()
+        x.axpy_at(con_indices, 1.0, self.update)
 
         # Update bound duals: z = max(z + dz, beta_min)
         self.optimizer.compute_affine_start_point(
@@ -94,4 +106,5 @@ class MultiplierInitialization:
 
     def _zero_multipliers(self, x):
         """Set all multipliers to zero."""
-        self.optimizer.set_multipliers_value(0.0, x)
+        con_indices = self.problem.get_constraint_indices()
+        x.fill_at(con_indices, 0.0)

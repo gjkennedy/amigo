@@ -38,8 +38,8 @@ class InertiaCorrector:
     _TEST_DC0_DX1 = 3
     _TEST_DC1_DX1 = 4
 
-    def __init__(self, mult_ind, barrier_param, options):
-        self.mult_ind = mult_ind
+    def __init__(self, optimizer, barrier_param, options):
+        self.optimizer = optimizer
         self._barrier = barrier_param
         self._verbose = options.get("verbose_barrier", False)
         self.numerical_eps = 1e-12
@@ -277,41 +277,56 @@ class InertiaCorrector:
         if hessian_scaling_fn is not None:
             hessian_scaling_fn(solver.hess)
 
-        primal_mask = ~self.mult_ind
-        n_primal = int(np.sum(primal_mask))
-        n_dual = int(np.sum(self.mult_ind))
-        n_total = n_primal + n_dual
+        # primal_mask = ~self.mult_ind
+        # n_primal = int(np.sum(primal_mask))
+        # n_dual = int(np.sum(self.mult_ind))
+        # n_total = n_primal + n_dual
+
+        num_primal = self.optimizer.get_num_primals()
+        num_dual = self.optimizer.get_num_duals()
+        num_total = num_primal + num_dual
+
         itol = inertia_tolerance
 
         def _ok(np_, nn_):
             return (
-                abs(np_ - n_primal) <= itol
-                and abs(nn_ - n_dual) <= itol
-                and np_ + nn_ >= n_total - itol
+                abs(np_ - num_primal) <= itol
+                and abs(nn_ - num_dual) <= itol
+                and np_ + nn_ >= num_total - itol
             )
 
         # Build baseline diagonal: Sigma + small numerical eps on primals
-        diag_arr = diag.get_array()
-        diag_arr[primal_mask] += self.numerical_eps
-        if zero_hessian_indices is not None and zero_hessian_eps is not None:
-            np.maximum(
-                diag_arr[zero_hessian_indices],
-                zero_hessian_eps,
-                out=diag_arr[zero_hessian_indices],
-            )
-        diag.copy_host_to_device()
+        primal_indices = self.optimizer.get_primal_indices()
+        dual_indices = self.optimizer.get_dual_indices()
+
+        diag.add_scalar_at(primal_indices, self.numerical_eps)
+        if zero_hessian_indices is not None:
+            diag.add_scalar_at(zero_hessian_indices, self.zero_hessian_eps)
+
+        # diag_arr = diag.get_array()
+        # diag_arr[primal_mask] += self.numerical_eps
+        # if zero_hessian_indices is not None and zero_hessian_eps is not None:
+        #     np.maximum(
+        #         diag_arr[zero_hessian_indices],
+        #         zero_hessian_eps,
+        #         out=diag_arr[zero_hessian_indices],
+        #     )
+        # diag.copy_host_to_device()
 
         # No inertia check available: simple fallback
         if not getattr(solver, "supports_inertia", False):
             try:
                 solver.add_diagonal_and_factor(diag)
             except Exception:
-                diag_arr[primal_mask] += self._dw_init
-                diag.copy_host_to_device()
+                diag.add_scalar_at(primal_indices, self._dw_init)
+
+                # diag_arr[primal_mask] += self._dw_init
+                # diag.copy_host_to_device()
                 solver.factor(obj_scale, x, diag, post_hessian=hessian_scaling_fn)
             return
 
-        reg_diag = diag.get_array().copy()
+        # reg_diag = diag.get_array().copy()
+        reg_diag = diag.duplicate()
 
         # Prepare new system: save last perturbation, reset current
         self._consider_new_system()
@@ -323,12 +338,18 @@ class InertiaCorrector:
 
         def _apply_and_factor(first=False):
             """Apply perturbation, factorize. Returns (n_pos, n_neg, singular)."""
-            diag.get_array()[:] = reg_diag
+            diag.copy(reg_diag)
+            # diag.get_array()[:] = reg_diag
+            # if self._delta_x_curr > 0:
+            #     diag.get_array()[primal_mask] += self._delta_x_curr
+            # if self._delta_c_curr > 0:
+            #     diag.get_array()[self.mult_ind] -= self._delta_c_curr
+            # diag.copy_host_to_device()
             if self._delta_x_curr > 0:
-                diag.get_array()[primal_mask] += self._delta_x_curr
+                diag.add_scalar_at(primal_indices, self._delta_x_curr)
             if self._delta_c_curr > 0:
-                diag.get_array()[self.mult_ind] -= self._delta_c_curr
-            diag.copy_host_to_device()
+                diag.add_scalar_at(dual_indices, -self._delta_c_curr)
+
             try:
                 if first:
                     solver.add_diagonal_and_factor(diag)

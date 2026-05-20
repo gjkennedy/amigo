@@ -84,15 +84,26 @@ class PyExternalCallback
 };
 
 // Templated wrapper function
-template <typename T>
+template <typename T, amigo::ExecPolicy policy>
 void bind_vector(py::module_& m, const std::string& name) {
   py::class_<amigo::Vector<T>, std::shared_ptr<amigo::Vector<T>>>(m,
                                                                   name.c_str())
       .def(py::init<int>())
-      .def("zero", &amigo::Vector<T>::zero)
-      .def("get_size", &amigo::Vector<T>::get_size)
       .def("copy", [](amigo::Vector<T>& self,
                       amigo::Vector<T>& src) { self.copy(src); })
+      .def("zero", &amigo::Vector<T>::zero)
+      .def("fill", &amigo::Vector<T>::template fill<policy>)
+      .def("add_scalar", &amigo::Vector<T>::template add_scalar<policy>)
+      .def("scale", &amigo::Vector<T>::template scale<policy>)
+      .def("axpy", &amigo::Vector<T>::template axpy<policy>)
+      .def("copy_at", &amigo::Vector<T>::template copy_at<policy>)
+      .def("fill_at", &amigo::Vector<T>::template fill_at<policy>)
+      .def("add_scalar_at", &amigo::Vector<T>::template add_scalar_at<policy>)
+      .def("scale_at", &amigo::Vector<T>::template scale_at<policy>)
+      .def("axpy_at", &amigo::Vector<T>::template axpy_at<policy>)
+      .def("get_values_at", &amigo::Vector<T>::template get_values_at<policy>)
+      .def("set_values_at", &amigo::Vector<T>::template set_values_at<policy>)
+      .def("get_size", &amigo::Vector<T>::get_size)
       .def("copy_host_to_device", &amigo::Vector<T>::copy_host_to_device)
       .def("copy_device_to_host", &amigo::Vector<T>::copy_device_to_host)
       .def("__getitem__",
@@ -401,8 +412,8 @@ PYBIND11_MODULE(amigo, mod) {
       .def("copy_data_device_to_host",
            &amigo::CSRMat<double>::copy_data_device_to_host);
 
-  bind_vector<int>(mod, "VectorInt");
-  bind_vector<double>(mod, "Vector");
+  bind_vector<int, detail::policy>(mod, "VectorInt");
+  bind_vector<double, detail::policy>(mod, "Vector");
 
   py::class_<
       amigo::ComponentGroupBase<double, detail::policy>,
@@ -487,6 +498,12 @@ PYBIND11_MODULE(amigo, mod) {
       .def("get_num_variables",
            &amigo::OptimizationProblem<double,
                                        detail::policy>::get_num_variables)
+      .def("get_primal_indices",
+           &amigo::OptimizationProblem<double,
+                                       detail::policy>::get_primal_indices)
+      .def("get_constraint_indices",
+           &amigo::OptimizationProblem<double,
+                                       detail::policy>::get_constraint_indices)
       .def("partition_from_root",
            &amigo::OptimizationProblem<double,
                                        detail::policy>::partition_from_root,
@@ -723,10 +740,8 @@ PYBIND11_MODULE(amigo, mod) {
             return self.create_opt_vector();
           },
           py::arg("x") = py::none())
-      .def("set_dual_values", &IPMOpt::set_dual_values)
-      .def("set_primal_values", &IPMOpt::set_primal_values)
-      .def("copy_duals", &IPMOpt::copy_duals)
-      .def("copy_primals", &IPMOpt::copy_primals)
+      .def("get_num_primal", &IPMOpt::get_num_primal)
+      .def("get_num_constraints", &IPMOpt::get_num_constraints)
       .def("initialize_duals_and_slacks", &IPMOpt::initialize_duals_and_slacks)
       .def("compute_residual", &IPMOpt::compute_residual)
       .def("compute_update", &IPMOpt::compute_update)
@@ -820,8 +835,6 @@ PYBIND11_MODULE(amigo, mod) {
       .def("get_ubx", &IPMOpt::get_ubx)
       .def("get_lbx_relaxed", &IPMOpt::get_lbx_relaxed)
       .def("get_ubx_relaxed", &IPMOpt::get_ubx_relaxed)
-      .def("get_num_inequalities", &IPMOpt::get_num_inequalities)
-      .def("get_num_design_variables", &IPMOpt::get_num_design_variables)
       .def("relax_bounds", &IPMOpt::relax_bounds, py::arg("factor") = 1e-8,
            py::arg("constr_viol_tol") = 1e-4)
       // .def(

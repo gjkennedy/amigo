@@ -103,36 +103,33 @@ class ProblemSetup:
         elif solver is not None:
             self.solver = solver
         else:
-            try:
-                self.solver = MumpsSolver(self.problem)
-            except (ImportError, Exception):
-                try:
-                    self.solver = PardisoSolver(self.problem)
-                except (ImportError, Exception):
-                    self.solver = DirectScipySolver(self.problem)
+            self.solver = AmigoSolver(self.problem)
+            # try:
+            #     self.solver = MumpsSolver(self.problem)
+            # except (ImportError, Exception):
+            #     try:
+            #         self.solver = PardisoSolver(self.problem)
+            #     except (ImportError, Exception):
+            #         self.solver = DirectScipySolver(self.problem)
 
     def _create_interior_point_backend(self):
         """Create the C++ InteriorPointOptimizer backend and slack mapping."""
         if self.distribute:
             x_vec = self.mpi_x
-            self.optimizer = InteriorPointOptimizer(
-                self.mpi_problem, self.mpi_lower, self.mpi_upper
-            )
+            self.optimizer = InteriorPointOptimizer(self.mpi_problem)
             data_vec = self.mpi_problem.get_data_vector()
         else:
             x_vec = self.x
-            self.optimizer = InteriorPointOptimizer(
-                self.problem, self.lower, self.upper
-            )
+            self.optimizer = InteriorPointOptimizer(self.problem)
             data_vec = self.problem.get_data_vector()
 
-        if self.model.num_slacks > 0 and not self.distribute:
-            self.optimizer.set_slack_mapping(
-                np.ascontiguousarray(self.model.slack_indices, dtype=np.int32),
-                np.ascontiguousarray(
-                    self.model.ineq_constraint_indices, dtype=np.int32
-                ),
-            )
+        # if self.model.num_slacks > 0 and not self.distribute:
+        #     self.optimizer.set_slack_mapping(
+        #         np.ascontiguousarray(self.model.slack_indices, dtype=np.int32),
+        #         np.ascontiguousarray(
+        #             self.model.ineq_constraint_indices, dtype=np.int32
+        #         ),
+        #     )
 
         x_vec.copy_host_to_device()
         data_vec.copy_host_to_device()
@@ -161,9 +158,11 @@ class ProblemSetup:
         if getattr(self.solver, "supports_inertia", False):
             inertia_corrector = InertiaCorrector(mult_ind, self.barrier_param, options)
             if comm_rank == 0:
-                n_primal = int(np.sum(~mult_ind))
-                n_dual = int(np.sum(mult_ind))
-                n_total = len(mult_ind)
+                n_primal = self.optimizer.get_num_primal()
+                n_dual = self.optimizer.get_num_constraints()
+                # n_primal = int(np.sum(~mult_ind))
+                # n_dual = int(np.sum(mult_ind))
+                n_total = n_primal + n_dual  # len(mult_ind)
                 solver_name = type(self.solver).__name__
                 print(f"\n  Amigo IPM ({solver_name})")
                 print(

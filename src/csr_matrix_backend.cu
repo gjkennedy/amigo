@@ -8,6 +8,40 @@ namespace amigo {
 namespace detail {
 
 template <typename T>
+AMIGO_KERNEL void fill_values(int n, T value, T* array) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (i < n) {
+    array[i] = value;
+  }
+}
+
+template <typename T>
+void fill_values_cuda(int n, T value, T* array, cudaStream_t stream) {
+  constexpr int TPB = 256;
+
+  int grid = (nrows + TPB - 1) / TPB;
+  fill_values<T><<<grid, TPB, 0, stream>>>(n, value, array);
+}
+
+template <typename T>
+AMIGO_KERNEL void add_scalar(int n, T value, T* array) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (i < n) {
+    array[i] += value;
+  }
+}
+
+template <typename T>
+void add_scalar_cuda(int n, T value, T* array, cudaStream_t stream) {
+  constexpr int TPB = 256;
+
+  int grid = (nrows + TPB - 1) / TPB;
+  fill_values<T><<<grid, TPB, 0, stream>>>(n, value, array);
+}
+
+template <typename T>
 AMIGO_KERNEL void add_array_values(int num_variables, const int* indices,
                                    const T* d_src, T* d_dest) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -68,6 +102,18 @@ void set_value_at_indices_cuda(const T value, int nentries,
   set_value_at_indices<T>
       <<<grid, TPB, 0, stream>>>(value, nentries, d_indices, d_array);
 }
+
+template void fill_values_cuda<double>(int n, double value, double* array,
+                                       cudaStream_t stream);
+
+template void fill_values_cuda<float>(int n, float value, float* array,
+                                      cudaStream_t stream);
+
+template void add_scalar_cuda<double>(int n, double value, double* array,
+                                      cudaStream_t stream);
+
+template void add_scalar_cuda<float>(int n, float value, float* array,
+                                     cudaStream_t stream);
 
 template void add_diagonal_cuda<double>(int nrows, const int* d_indices,
                                         const double* d_values, double* d_data,

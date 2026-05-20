@@ -79,7 +79,8 @@ class ConvergenceCheck:
             return CONVERGED, overall_error, acceptable_counter, precision_floor_count
 
         # Divergence check
-        x_max = np.max(np.abs(self.vars.get_solution().get_array()))
+        # x_max = np.max(np.abs(self.vars.get_solution().get_array()))
+        x_max, _ = self.problem.maxabs(self.vars.get_solution())
         if x_max > diverging_iterates_tol:
             if comm_rank == 0:
                 print(f"  Diverging iterates: max |x| = {x_max:.2e}")
