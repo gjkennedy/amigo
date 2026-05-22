@@ -89,8 +89,9 @@ void bind_vector(py::module_& m, const std::string& name) {
   py::class_<amigo::Vector<T>, std::shared_ptr<amigo::Vector<T>>>(m,
                                                                   name.c_str())
       .def(py::init<int>())
-      .def("copy", [](amigo::Vector<T>& self,
-                      amigo::Vector<T>& src) { self.copy(src); })
+      .def("copy",
+           [](std::shared_ptr<amigo::Vector<T>> self,
+              std::shared_ptr<amigo::Vector<T>> src) { self->copy(src); })
       .def("zero", &amigo::Vector<T>::zero)
       .def("fill", &amigo::Vector<T>::template fill<policy>)
       .def("add_scalar", &amigo::Vector<T>::template add_scalar<policy>)
@@ -495,6 +496,23 @@ PYBIND11_MODULE(amigo, mod) {
                 comm, data_owners, var_owners, output_owners, var_types,
                 components);
           }))
+      .def("create_primal_vector",
+           &amigo::OptimizationProblem<double,
+                                       detail::policy>::create_primal_vector)
+      .def(
+          "create_constraint_vector",
+          &amigo::OptimizationProblem<double,
+                                      detail::policy>::create_constraint_vector)
+      .def("dot", &amigo::OptimizationProblem<double, detail::policy>::dot)
+      .def("norm", &amigo::OptimizationProblem<double, detail::policy>::norm)
+      .def("maxabs",
+           [](amigo::OptimizationProblem<double, detail::policy>& self,
+              std::shared_ptr<amigo::Vector<double>> a) {
+             int index;
+             return self.maxabs(a, index);
+           })
+      .def("abssum",
+           &amigo::OptimizationProblem<double, detail::policy>::abssum)
       .def("get_num_variables",
            &amigo::OptimizationProblem<double,
                                        detail::policy>::get_num_variables)

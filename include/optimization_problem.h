@@ -156,7 +156,7 @@ class OptimizationProblem {
    * @return Dot product between a and b
    */
   T dot(std::shared_ptr<Vector<T>> a, std::shared_ptr<Vector<T>> b) {
-    T local = a->dot(b);
+    T local = a->template dot<policy>(b);
     T global = 0.0;
     MPI_Allreduce(&local, &global, 1, get_mpi_type<T>(), MPI_SUM, comm);
     return global;
@@ -183,7 +183,7 @@ class OptimizationProblem {
 
     // Find the local max
     int local_index = -1;
-    T local_value = a->maxabs(local_index);
+    T local_value = a->template maxabs<policy>(local_index);
 
     // Convert to global index
     const int* range = var_owners->get_range();
@@ -208,6 +208,19 @@ class OptimizationProblem {
 
     index = global.index;
     return global.value;
+  }
+
+  /**
+   * @brief Compute the sum of the absolute values
+   *
+   * @param a The input vector
+   * @return T The max absolute value
+   */
+  T abssum(std::shared_ptr<Vector<T>> a) {
+    T local = a->template abssum<policy>();
+    T global = 0.0;
+    MPI_Allreduce(&local, &global, 1, get_mpi_type<T>(), MPI_SUM, comm);
+    return global;
   }
 
   /**

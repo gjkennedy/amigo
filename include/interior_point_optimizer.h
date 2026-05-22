@@ -40,11 +40,11 @@ class OptVector {
   }
 
   void copy(std::shared_ptr<OptVector<T>> src) {
-    x->copy(*src->x);
-    sl->copy(*src->sl);
-    su->copy(*src->su);
-    zl->copy(*src->zl);
-    zu->copy(*src->zu);
+    x->copy(src->x);
+    sl->copy(src->sl);
+    su->copy(src->su);
+    zl->copy(src->zl);
+    zu->copy(src->zu);
   }
 
   int get_num_primal() const { return num_primal; }
@@ -269,7 +269,7 @@ class InteriorPointOptimizer {
 #endif
 
     // Compute the local contributions to the residual norm
-    T local = res->template dot<policy>(*res);
+    T local = res->template dot<policy>(res);
     T total;
     MPI_Allreduce(&local, &total, 1, get_mpi_type<T>(), MPI_SUM, comm);
     return std::sqrt(total);
@@ -320,7 +320,7 @@ class InteriorPointOptimizer {
                       std::shared_ptr<OptVector<T>> upd) const {
     detail::OptState<const T> s =
         detail::OptState<const T>::template make<policy>(vars);
-    upd->get_solution()->copy(*px);
+    upd->get_solution()->copy(px);
     T *dzl, *dzu;
     upd->template get_bound_duals<policy>(&dzl, &dzu);
     detail::compute_bound_dual_step(mu, info, s,

@@ -98,11 +98,11 @@ class Vector {
     }
   }
 
-  void copy(const Vector<T>& src) {
-    if (array && src.array) {
-      std::copy(src.array, src.array + size, array);
+  void copy(const std::shared_ptr<Vector<T>> src) {
+    if (array && src->array) {
+      std::copy(src->array, src->array + size, array);
     }
-    backend.copy(src.get_device_array());
+    backend.copy(src->get_device_array());
   }
 
   void zero() {
@@ -149,30 +149,30 @@ class Vector {
   }
 
   template <ExecPolicy policy>
-  void axpy(T alpha, const Vector<T>& x) {
+  void axpy(T alpha, const std::shared_ptr<Vector<T>> x) {
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
       for (int i = 0; i < local_size; i++) {
-        array[i] += alpha * x.array[i];
+        array[i] += alpha * x->array[i];
       }
     } else {
-      backend.axpy(alpha, x.get_device_array());
+      backend.axpy(alpha, x->get_device_array());
     }
   }
 
   template <ExecPolicy policy>
-  T dot(const Vector<T>& x) const {
+  T dot(const std::shared_ptr<Vector<T>> x) const {
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
       T value = 0.0;
-      if (array && x.array) {
+      if (array && x->array) {
         for (int i = 0; i < local_size; i++) {
-          value += array[i] * x.array[i];
+          value += array[i] * x->array[i];
         }
       }
       return value;
     } else {
-      return backend.dot(x.get_device_array());
+      return backend.dot(x->get_device_array());
     }
   }
 
@@ -191,6 +191,20 @@ class Vector {
       return value;
     } else {
       return backend.maxabs(index);
+    }
+  }
+
+  template <ExecPolicy policy>
+  T abssum() {
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      T value = 0.0;
+      for (int i = 0; i < local_size; i++) {
+        value += std::fabs(array[i]);
+      }
+      return value;
+    } else {
+      return backend.abssum();
     }
   }
 
