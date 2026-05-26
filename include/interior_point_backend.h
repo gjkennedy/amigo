@@ -488,11 +488,15 @@ T compute_barrier_log_sum(T mu, const OptProblemInfo<T>& p,
   for (int i = 0; i < p.num_primals; i++) {
     if (!std::isinf(p.lbx[i])) {
       T g = s.sl[i];
-      if (g > 0) b -= mu * std::log(g);
+      if (g > 0) {
+        b -= mu * std::log(g);
+      }
     }
     if (!std::isinf(p.ubx[i])) {
       T g = s.su[i];
-      if (g > 0) b -= mu * std::log(g);
+      if (g > 0) {
+        b -= mu * std::log(g);
+      }
     }
   }
   return b;

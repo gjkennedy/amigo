@@ -19,7 +19,8 @@ class OptimalityScaling:
 
     def _compute_optimality_scaling(self):
         """Compute optimality error scaling factors (s_d, s_c)."""
-        # TODO: move to backend: backend.optimality_scaling() that returns (s_d, s_c) without reading zl/zu/bounds from Python.
+        # TODO: move to backend: backend.optimality_scaling() that returns
+        # (s_d, s_c) without reading zl/zu/bounds from Python.
         s_max = 100.0
 
         # Bound multiplier sums: |z_L| + |z_U|
@@ -36,18 +37,37 @@ class OptimalityScaling:
         # y_asum = float(np.sum(np.abs(xlam[mult_ind])))
         # n_constraints = int(np.sum(mult_ind))
 
-        # # s_c: bound multiplier scaling
-        # if n_bounds == 0:
-        #     s_c = 1.0
-        # else:
-        #     s_c = max(s_max, z_asum / n_bounds) / s_max
+        # Get the vectors
+        zl = self.vars.get_zl()
+        zu = self.vars.get_zu()
+        z_asum = self.problem.abssum(zl) + self.problem.abssum(zu)
 
-        # # s_d: dual (stationarity) scaling
-        # n_all = n_constraints + n_bounds
-        # if n_all == 0:
-        #     s_d = 1.0
-        # else:
-        #     s_d = max(s_max, (y_asum + z_asum) / n_all) / s_max
+        # Get the lower/upper bounds. This is not GPU compatible. Need to fix this
+        lbx = self.optimizer.get_lbx().get_array()
+        ubx = self.optimizer.get_ubx().get_array()
+        n_bounds = int(np.sum(np.isfinite(lbx)) + np.sum(np.isfinite(ubx)))
+
+        # Get the sum of the absolute values of the multipliers
+        con_indices = self.problem.get_constraint_indices()
+        y = self.problem.create_constraint_vector()
+        xlam = self.vars.get_solution()
+        xlam.get_values_at(con_indices, y)
+        y_asum = self.problem.abssum(y)
+
+        n_constraints = self.optimizer.get_num_constraints()
+
+        # s_c: bound multiplier scaling
+        if n_bounds == 0:
+            s_c = 1.0
+        else:
+            s_c = max(s_max, z_asum / n_bounds) / s_max
+
+        # s_d: dual (stationarity) scaling
+        n_all = n_constraints + n_bounds
+        if n_all == 0:
+            s_d = 1.0
+        else:
+            s_d = max(s_max, (y_asum + z_asum) / n_all) / s_max
 
         s_c = 1.0
         s_d = 1.0

@@ -32,10 +32,34 @@ class IterateInitialization:
         self.optimizer.initialize_duals_and_slacks(self.barrier_param, self.vars)
 
         # Step 3: Initialize slacks to s = d(x), then push into bounds.
-        if self.optimizer.has_slacks():
-            self._update_gradient(x)
-            self.optimizer.initialize_slacks(self.grad, self.vars)
-            self.optimizer.initialize_duals_and_slacks(self.barrier_param, self.vars)
+        # if self.optimizer.has_slacks():
+        self._update_gradient(x)
+
+        # Set the initial point - need the slack and inequality indices
+        if hasattr(self, "model"):
+            # Get the slack and inequality indices
+            slack_indices = self.model.slack_indices
+            ineq_indices = self.model.ineq_constraint_indices
+
+            # Copy the gradient and solution to the host
+            x.copy_device_to_host()
+            self.grad.copy_device_to_host()
+            x_array = x.get_array()
+            grad_array = self.grad.get_array()
+
+            # Set the values
+            x_array[slack_indices] += grad_array[ineq_indices]
+
+            # Update the values
+            x.copy_host_to_device()
+            self.grad.copy_host_to_device()
+
+        self.optimizer.initialize_duals_and_slacks(self.barrier_param, self.vars)
+
+        # if self.optimizer.has_slacks():
+        #     self._update_gradient(x)
+        #     self.optimizer.initialize_slacks(self.grad, self.vars)
+        #     self.optimizer.initialize_duals_and_slacks(self.barrier_param, self.vars)
 
         # Step 4: Recompute gradient at the pushed x with lam=0
         self._update_gradient(x)

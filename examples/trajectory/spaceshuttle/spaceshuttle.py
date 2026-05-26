@@ -326,7 +326,6 @@ model.link(f"dyn.q[{num_time_steps}, :]", "fc.q[0, :]")
 # Link objective - final latitude (theta at final time)
 model.link(f"dyn.q[{num_time_steps}, 2]", "obj.theta[0]")
 
-
 # Set initial guess for design variables (scaled)
 # initial guess for final latitude
 model.set_meta("value", "obj.theta[0]", 30.0 / scaling["latitude"])
