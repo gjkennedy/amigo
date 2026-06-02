@@ -9,19 +9,25 @@ or feasibility restoration.
 
 import warnings
 
-from ..model import ModelVector
+# Raw pybind11 classes
 from ..amigo import InteriorPointOptimizer, Vector
-from .evaluator import Evaluator
-from .default_options import get_default_options
-from .convergence_check import ConvergenceCheck, CONTINUE, CONVERGED
+
+# Import from the model
+from ..model import ModelVector
+
+# Optimizer imports from algorithm classes
 from .barrier_strategy import make_barrier_strategy
-from .newton_direction import NewtonStep
-from .solvers import InertiaCorrector, make_solver
-from .line_search import make_line_search
-from .multiplier_initialization import MultiplierInitializer
+from .convergence_check import ConvergenceCheck, CONTINUE, CONVERGED
+from .default_options import get_default_options
+from .evaluator import Evaluator
+from .feasibility_restoration import FeasibilityRestoration
 from .iterate_initialization import SlackInitializer
 from .iteration_logger import OptimizationLogger
 from .ipm_state import InteriorPointState
+from .line_search import make_line_search
+from .multiplier_initialization import MultiplierInitializer
+from .newton_direction import NewtonStep
+from .solvers import InertiaCorrector, make_solver
 
 
 class Optimizer:
@@ -142,14 +148,14 @@ class Optimizer:
         # Allocate the Newton step
         newton_step = NewtonStep(options, self.problem, self.optimizer)
 
-        # TODO: Initialize the feasibility restoration phase
-        # feasibility_restore =
+        # Feasibility restoration phase algorithm
+        feasible_resto = FeasibilityRestoration(options, self.problem, self.optimizer)
 
         # Initialize the barrier strategy correction algorithm
         barrier_strategy = make_barrier_strategy(options, self.problem, self.optimizer)
 
         # Initialize the convergence check
-        check = ConvergenceCheck(options)
+        check = ConvergenceCheck(options, self.problem, self.optimizer)
 
         # Initialize the logger. The logger takes in additional objects that may
         # provide logging info via "obj.get_log_info()"
@@ -208,7 +214,7 @@ class Optimizer:
             # TODO: Implement a inertia info class
             factor_ok = inertia_corrector.factor_for_inertia(solver, evaluator, state)
 
-            do_feas_resto = True
+            do_feasible_resto = True
             if factor_ok:
                 # Compute the direction and store in state.step. This should be a descent direction
                 # because of the inertia check
@@ -227,12 +233,11 @@ class Optimizer:
                 )
 
                 if line_search_info.success:
-                    do_feas_resto = False
+                    do_feasible_resto = False
 
             # If the line search was not successful, perform feasibility restoration
-            if do_feas_resto:
-                warnings.warn("Feasibility restoration not implemented")
-                # feasibility_restore.restoration_phase(solver, state)
+            if do_feasible_resto:
+                feasible_resto.restoration_phase(solver, evaluator, state)
 
         else:
             # The optimization for loop completed normally, so we did not converge

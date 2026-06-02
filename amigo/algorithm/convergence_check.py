@@ -9,8 +9,6 @@ detection catches bit-identical residuals, the numerical limit below
 which further progress is not possible.
 """
 
-import numpy as np
-
 # Return codes for convergence check
 CONTINUE = 0
 CONVERGED = 1
@@ -23,10 +21,12 @@ ITERATING = 5
 class ConvergenceCheck:
     """Convergence checks: primary, acceptable, divergence, precision floor."""
 
-    def __init__(self, options):
+    def __init__(self, options, problem, optimizer):
         self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
 
-        # The previous residual norm - not initialized
+        # The previous residual norm - initialize to zero
         self.prev_res_norm = 0.0
 
         # Set the precision floor count
@@ -68,11 +68,11 @@ class ConvergenceCheck:
         ):
             return CONVERGED
 
-        # x_max = self.problem.maxabs(iterate.vars.get_solution())
-        # if x_max > diverging_iterates_tol:
-        #     if self.comm_rank == 0:
-        #         print(f"  Diverging iterates: max |x| = {x_max:.2e}")
-        #     return DIVERGED
+        x_max = self.problem.maxabs(state.current.get_solution())
+        if x_max > diverging_iterates_tol:
+            if state.comm_rank == 0:
+                print(f"  Diverging iterates: max |x| = {x_max:.2e}")
+            return DIVERGED
 
         # Acceptable convergence
         is_acceptable = (

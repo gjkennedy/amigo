@@ -41,18 +41,19 @@ class MultiplierInitializer:
         # Zero the multipliers
         x.fill_at(con_indices, 0.0)
 
-        # The gradient and Hessian information are now invalid
+        # The gradient and Hessian information are now invalid since the multipliers
+        # have changed.
         state.invalidate()
 
-        # We want to zero the contributions from the objective for the Hessian evaluation
+        # Store the objective scaling to restore it later
         obj_scale_store = state.obj_scale
 
         # Evaluate the gradient. The multipliers are zero and the objective scaling = 1,
-        # the gradient is the gradient of the objective only
+        # the gradient is the gradient of the objective only.
         state.obj_scale = 1.0
         evaluator.evaluate_gradient(state)
 
-        # Evaluate the Hessian. The multipliers are zero and the objective scaling = 1,
+        # Evaluate the Hessian. The multipliers are zero and the objective scaling = 0,
         # the Hessian only contains contributions from the constraints
         state.obj_scale = 0.0
         evaluator.evaluate_hessian(state)
@@ -72,6 +73,8 @@ class MultiplierInitializer:
             state.current, state.gradient, state.residual
         )
         state.residual.scale(-1.0)
+
+        # Zero the contributions from the constraints
         state.residual.fill_at(con_indices, 0.0)
 
         # Solve for the update

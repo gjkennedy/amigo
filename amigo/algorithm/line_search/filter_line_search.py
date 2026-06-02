@@ -91,10 +91,10 @@ class FilterLineSearch(LineSearch):
         # theta_min, theta_max (Eq. 21)
         self.theta_min = 1e-4 * max(1.0, ref_theta)
         self.theta_max = 1e4 * max(1.0, ref_theta)
-
         return
 
     def is_ftype(self, base, alpha_test):
+        """Check if this is a f-type step that primarily reduces the objective/barrier function"""
         delta = self.options["filter_delta"]
         s_theta = self.options["filter_s_theta"]
         s_phi = self.options["filter_s_phi"]
@@ -133,25 +133,29 @@ class FilterLineSearch(LineSearch):
 
     def check_acceptance(self, base, trial_barr, trial_theta, alpha_test):
         if trial_theta > self.theta_max:
-            return False, False
+            return False
         if (
             alpha_test > 0.0
             and self.is_ftype(base, alpha_test)
             and base.ref_theta <= self.theta_min
         ):
             if not self.armijo_holds(base, trial_barr, alpha_test):
-                return False, False
+                return False
         else:
             if not self.acceptable_to_iterate(base, trial_barr, trial_theta):
-                return False, False
+                return False
 
-        filt_ok = self.filter.is_acceptable(trial_barr, trial_theta)
-        return filt_ok, not filt_ok
+        return self.filter.is_acceptable(trial_barr, trial_theta)
 
     def update_filter(self, base, trial_barr, trial_theta, alpha_test):
-        ftest = self.is_ftype(base, alpha_test)
-        armijo = self.armijo_holds(base, trial_barr, alpha_test)
-        self.filter.add(trial_barr, trial_theta)
+        is_ftype = (
+            base.ref_theta <= self.theta_min
+            and self.is_ftype(base, alpha_test)
+            and self.armijo_holds(base, trial_barr, alpha_test)
+        )
+
+        if not is_ftype:
+            self.filter.add(base.ref_barr, base.ref_theta)
 
     def build_base_point(self, evaluator, state):
         base = self.FilterBasePoint()
@@ -241,7 +245,7 @@ class FilterLineSearch(LineSearch):
             # Compute the l1 norm of the constraint violation
             trial_theta = evaluator.evalate_infeasibility_from_gradient(self.trial_grad)
 
-            accepted, filt_rej = self.check_acceptance(
+            accepted = self.check_acceptance(
                 base, trial_barr, trial_theta, alpha_primal
             )
 
@@ -254,12 +258,6 @@ class FilterLineSearch(LineSearch):
                 state.current.copy(self.trial)
                 state.gradient.copy(self.trial_grad)
                 state.gradient_current = True
-
-                # Check if we have repeated rejected steps here...
-                if filt_rej:
-                    self.successive_filter_rejections += 1
-                else:
-                    self.successive_filter_rejections = 0
 
                 # Set the current info
                 info.success = True

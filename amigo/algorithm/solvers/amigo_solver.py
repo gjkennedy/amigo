@@ -28,6 +28,10 @@ class AmigoSolver(LinearSolver):
         if hessian != self.hessian:
             raise ValueError("Hessian instance must be the same")
 
+        # Copy the Hessian and diagonal entries to the host
+        diagonal.copy_device_to_host()
+        self.hessian.copy_data_device_to_host()
+
         flag = self.ldl.factor(diagonal)
         if flag != 0:
             raise RuntimeError(
@@ -37,8 +41,17 @@ class AmigoSolver(LinearSolver):
         return flag
 
     def solve(self, b, x):
+        # Copy b to x
         x.copy(b)
+
+        # Copy the components to the host
+        x.copy_device_to_host()
+
+        # Solve the problem on the host
         self.ldl.solve(x)
+
+        # Copy the solution back to the device
+        x.copy_host_to_device()
         return
 
     def inertia_enabled(self):
