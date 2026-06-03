@@ -8,7 +8,13 @@ Expensive debug diagnostics live in newton_diagnostics.py.
 import sys
 import time
 
-from .convergence_check import CONVERGED, CONVERGED_ACCEPTABLE
+from .convergence_check import (
+    CONTINUE,
+    CONVERGED,
+    CONVERGED_ACCEPTABLE,
+    PRECISION_FLOOR,
+    DIVERGED,
+)
 
 
 class OptimizationLogger:
@@ -53,10 +59,23 @@ class OptimizationLogger:
         px = state.step.get_solution()
         iter_data["step_norm"] = self.problem.maxabs(px)
 
+        # Write out the values
         self._write_log(status, state, iter_data)
 
-        # Write out the values
+        # Append the iteration data
         self.opt_data["iterations"].append(iter_data)
+
+        if status == CONVERGED:
+            self.opt_data["converged"] = True
+        elif status == CONVERGED_ACCEPTABLE:
+            self.opt_data["converged"] = True
+            self.opt_data["acceptable"] = True
+        elif status == PRECISION_FLOOR:
+            self.opt_data["converged"] = True
+            self.opt_data["acceptable"] = True
+            self.opt_data["precision_floor"] = True
+        elif status == DIVERGED or status == CONTINUE:
+            self.opt_data["converged"] = False
 
         return
 
