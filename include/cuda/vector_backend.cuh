@@ -91,8 +91,14 @@ class CudaVecBackend {
 
   void zero() { AMIGO_CHECK_CUDA(cudaMemset(d_ptr, 0, size * sizeof(T))); }
 
-  void set_values(int n, const int d_idx[], T value) {
-    detail::set_value_at_indices_cuda(value, n, d_idx, d_ptr);
+  void set_value(T value) {}
+
+  void fill(int n, const int d_idx[], T value) {
+    detail::fill_value_cuda<T>(value, n, d_idx, d_ptr);
+  }
+
+  void add_scalar(int n, const int d_idx[], T value) {
+    detail::add_scalar_cuda<T>(value, n, d_idx, d_ptr);
   }
 
   T dot(const T* d_src) const {

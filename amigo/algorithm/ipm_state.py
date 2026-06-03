@@ -6,63 +6,101 @@ is a lightweight bag of per-iteration scratch data handed to the
 barrier strategy each step.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Optional
+import amigo as am
 
 
-@dataclass
-class IpmState:
-    """Mutable per-iteration state of the interior-point loop."""
+class InteriorPointState:
+    # Communicator rank
+    comm_rank: int
 
-    # Step tracking (updated after each accepted step)
-    line_iters: int = 0
-    alpha_x_prev: float = 0.0
-    alpha_z_prev: float = 0.0
-    x_index_prev: int = -1
-    z_index_prev: int = -1
+    # Iteration counter
+    iter: int
 
-    # Convergence tracking
-    prev_res_norm: float = float("inf")
-    acceptable_counter: int = 0
-    precision_floor_count: int = 0
+    # Barrier parameter
+    mu: float
 
-    # Rejection tracking
-    consecutive_rejections: int = 0
-    zero_step_count: int = 0
+    # Fraction to the boundary parameter
+    tau: float
 
-    # Classical-barrier filter monotone fallback
-    filter_monotone_mode: bool = False
-    filter_monotone_mu: Optional[float] = None
+    # Objective scaling factor
+    obj_scale: float
 
-    # Filter reset heuristic
-    count_successive_filter_rejections: int = 0
-    filter_reset_count: int = 0
+    # Objective function value (scaled) and log-barrier term
+    objective_value: float
+    log_barrier_value: float
+    con_infeasibility: float
 
-    # Barrier parameter at the start of the most recent residual eval
-    res_norm_mu: float = 0.0
+    # Current primal-dual vector
+    current: am.OptVector
 
+    # Gradient information
+    gradient: am.Vector
+    gradient_current: bool
 
-@dataclass
-class StepContext:
-    """Per-iteration inputs passed to BarrierStrategy.step()."""
+    # Second-order information
+    diagonal: am.Vector
+    hessian: am.CSRMat
+    hessian_current: bool
 
-    i: int = 0
-    comm_rank: int = 0
-    res_norm: float = 0.0
-    tol: float = 0.0
-    compl_inf_tol: float = 0.0
+    # Max primal and max dual step lengths
+    max_alpha_primal: float
+    max_alpha_dual: float
+    step: am.OptVector
+    step_current: bool
 
-    # Problem structure
-    mult_ind: Any = None
-    x: Any = None
-    diag_base: Any = None
+    # Residual and step information
+    residual_norm: float
+    residual: am.Vector
 
-    # Inertia correction + zero-Hessian handling
-    inertia_corrector: Any = None
-    zero_hessian_indices: Any = None
-    zero_hessian_eps: float = 0.0
+    # Current error measures
+    primal_infeas: float
+    dual_infeas: float
+    complementarity: float
+    kkt_error: float
+    residual_current: bool
 
-    # Classical-barrier filter monotone fallback (strategy may update
-    # filter_monotone_mu in place; driver reads it back)
-    filter_monotone_mode: bool = False
-    filter_monotone_mu: Optional[float] = None
+    def __init__(self, x, options, problem, optimizer):
+        self.comm_rank = 0
+        self.iter = 0
+        self.mu = options["initial_barrier_param"]
+        self.tau = options["fraction_to_boundary"]
+        self.obj_scale = 1.0
+        self.objective_value = 0.0
+        self.log_barrier_value = 0.0
+        self.con_infeasibility = 0.0
+
+        self.current = optimizer.create_opt_vector(x)
+        self.gradient = problem.create_vector()
+        self.gradient_current = False
+
+        self.residual = problem.create_vector()
+        self.diagonal = problem.create_vector()
+        self.hessian = problem.create_matrix()
+        self.hessian_current = False
+
+        self.max_alpha_primal = 1.0
+        self.max_alpha_dual = 1.0
+        self.step = optimizer.create_opt_vector()
+        self.step_current = False
+
+        self.residual_norm = 0.0
+        self.residual = problem.create_vector()
+        self.primal_infeas = 0.0
+        self.dual_infeas = 0.0
+        self.complementarity = 0.0
+        self.kkt_error = 0.0
+        self.residual_current = False
+
+    def get_current_point(self):
+        """Get the current primal-dual vector"""
+        return self.current.get_solution()
+
+    def get_trial_point(self):
+        """Get the trial primal-dual vector"""
+        return self.trial.get_solution()
+
+    def invalidate(self):
+        self.gradient_current = False
+        self.hessian_current = False
+        self.residual_current = False
+        self.step_current = False

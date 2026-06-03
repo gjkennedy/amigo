@@ -10,7 +10,6 @@ import pytest, os, sys
 import amigo as am
 from amigo.interp import BSpline
 
-
 # ── Class definitions (adapted from examples/time_to_climb/time_to_climb_traj.py) ──
 
 
@@ -193,28 +192,10 @@ def opt_result():
     # Link boundary conditions
     traj.link_boundary_conditions(model, "traj", "ic", "fc")
 
-    # Build and initialize — always run build_module from the test file's
-    # own directory so generate_cpp() writes the .cpp there and CMake finds
-    # it. Then ensure that directory is on sys.path so importlib can find
-    # the compiled .so regardless of where pytest is invoked from.
-    _test_dir = os.path.dirname(os.path.abspath(__file__))
-    _orig_dir = os.getcwd()
-    os.chdir(_test_dir)
-    try:
-        model.build_module()
-    finally:
-        os.chdir(_orig_dir)
-    if _test_dir not in sys.path:
-        sys.path.insert(0, _test_dir)
-    model.initialize()
-
     # Create design vector and bounds
-    x = model.create_vector()
-    lower = model.create_vector()
-    upper = model.create_vector()
-
-    # Default to zero
-    x[:] = 0.0
+    x = model.get_meta_view("value")
+    lower = model.get_meta_view("lower")
+    upper = model.get_meta_view("upper")
 
     # Initial guess for final time
     tf_guess = 200.0
@@ -232,13 +213,13 @@ def opt_result():
 
     # Bounds
     lower["obj.tf"] = 1.0
-    upper["obj.tf"] = float("inf")
+    upper["obj.tf"] = am.inf
 
-    lower["traj.source.alpha"] = -float("inf")
-    upper["traj.source.alpha"] = float("inf")
+    lower["traj.source.alpha"] = -am.inf
+    upper["traj.source.alpha"] = am.inf
 
-    lower["traj.source.q"] = -float("inf")
-    upper["traj.source.q"] = float("inf")
+    lower["traj.source.q"] = -am.inf
+    upper["traj.source.q"] = am.inf
 
     lower["traj.source.q[:, 1]"] = -90.0
     upper["traj.source.q[:, 1]"] = 90.0
@@ -249,10 +230,27 @@ def opt_result():
     lower["bspline.control_points.x"] = -25.0
     upper["bspline.control_points.x"] = 25.0
 
+    # Build and initialize — always run build_module from the test file's
+    # own directory so generate_cpp() writes the .cpp there and CMake finds
+    # it. Then ensure that directory is on sys.path so importlib can find
+    # the compiled .so regardless of where pytest is invoked from.
+    _test_dir = os.path.dirname(os.path.abspath(__file__))
+    _orig_dir = os.getcwd()
+    os.chdir(_test_dir)
+    try:
+        model.build_module()
+    finally:
+        os.chdir(_orig_dir)
+    if _test_dir not in sys.path:
+        sys.path.insert(0, _test_dir)
+    model.initialize()
+
     # Run optimizer
-    opt = am.Optimizer(model, x, lower=lower, upper=upper, solver="mumps")
+    xvec = model.create_vector()
+    opt = am.Optimizer(model, xvec)
     data = opt.optimize(
         {
+            "solver": "amigo",
             "initial_barrier_param": 1.0,
             "monotone_barrier_fraction": 0.25,
             "barrier_strategy": "monotone",
@@ -263,7 +261,7 @@ def opt_result():
         }
     )
 
-    return x, data
+    return xvec, data
 
 
 # ── Test functions ────────────────────────────────────────────────────────────

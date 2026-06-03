@@ -34,16 +34,14 @@ Module map, grouped by concern:
 """
 
 from .ipm_driver import Optimizer
-from .inertia_correction import InertiaCorrector
-from .filter_acceptance import Filter
 from .default_options import get_default_options
 
 from .solvers import (
     AmigoSolver,
-    DirectCudaSolver,
-    LNKSInexactSolver,
+    # DirectCudaSolver,
+    # LNKSInexactSolver,
     MumpsSolver,
-    PardisoSolver,
-    DirectPetscSolver,
-    DirectScipySolver,
+    # PardisoSolver,
+    # DirectPetscSolver,
+    # DirectScipySolver,
 )

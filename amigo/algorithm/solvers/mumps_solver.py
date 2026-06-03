@@ -1,98 +1,89 @@
-from . import DirectSparseSolver
+from . import LinearSolver
 
 import os
 import sys
+import ctypes
 import numpy as np
 
 
-class MumpsSolver(DirectSparseSolver):
-    """Sparse symmetric indefinite solver via MUMPS (LDL^T with inertia).
+def _load_mumps_library():
+    """Locate and load the MUMPS shared library.
 
-    Uses the MUMPS C interface (dmumps_c) via ctypes. Provides exact
-    inertia counts from MUMPS info arrays after factorization.
-
-    Requires coin-or/ThirdParty-Mumps (with METIS ordering and scaling).
-    Windows: build via MSYS2 with mingw-w64-x86_64-metis.
-    Linux: apt install libmumps-dev or conda install mumps-seq or install via ThirdParty-Mumps.
-    Mac: install via ThirdParty-Mumps.
+    Search order: MUMPS_LIB_DIR env var, coin-or ThirdParty-Mumps
+    install, conda environment, system PATH.
     """
+    import ctypes
 
-    supports_inertia = True
-    solver_name = "MumpsSolver"
+    lib_dir = os.environ.get("MUMPS_LIB_DIR", "")
 
-    @staticmethod
-    def _load_mumps_library():
-        """Locate and load the MUMPS shared library.
+    # Platform-specific library names and search paths
+    if sys.platform == "win32":
+        # Register dependency directories for Windows DLL resolution
+        for d in [
+            r"C:\msys64\mingw64\bin",
+            os.path.expanduser("~/mumps-coinor/bin"),
+        ]:
+            if os.path.isdir(d):
+                os.add_dll_directory(d)
 
-        Search order: MUMPS_LIB_DIR env var, coin-or ThirdParty-Mumps
-        install, conda environment, system PATH.
-        """
-        import ctypes
+        names = ["libcoinmumps-3.dll", "libdmumps.dll", "dmumps.dll"]
+        search_dirs = [
+            lib_dir,
+            os.path.expanduser("~/mumps-coinor/bin"),
+        ]
+        conda = os.environ.get("CONDA_PREFIX", "")
+        if conda:
+            search_dirs.append(os.path.join(conda, "Library", "bin"))
+    elif sys.platform == "darwin":
+        names = ["libcoinmumps.dylib", "libdmumps.dylib"]
+        coinor = os.path.expanduser("~/mumps-coinor/lib")
+        brew_prefix = "/opt/homebrew/opt/brewsci-mumps/lib"
+        brew_x86 = "/usr/local/opt/brewsci-mumps/lib"
+        search_dirs = [d for d in [lib_dir, coinor, brew_prefix, brew_x86] if d]
+    else:
+        names = ["libcoinmumps.so", "libdmumps.so"]
+        coinor = os.path.expanduser("~/mumps-coinor/lib")
+        search_dirs = [d for d in [lib_dir, coinor] if d]
 
-        lib_dir = os.environ.get("MUMPS_LIB_DIR", "")
-
-        # Platform-specific library names and search paths
-        if sys.platform == "win32":
-            # Register dependency directories for Windows DLL resolution
-            for d in [
-                r"C:\msys64\mingw64\bin",
-                os.path.expanduser("~/mumps-coinor/bin"),
-            ]:
-                if os.path.isdir(d):
-                    os.add_dll_directory(d)
-
-            names = ["libcoinmumps-3.dll", "libdmumps.dll", "dmumps.dll"]
-            search_dirs = [
-                lib_dir,
-                os.path.expanduser("~/mumps-coinor/bin"),
-            ]
-            conda = os.environ.get("CONDA_PREFIX", "")
-            if conda:
-                search_dirs.append(os.path.join(conda, "Library", "bin"))
-        elif sys.platform == "darwin":
-            names = ["libcoinmumps.dylib", "libdmumps.dylib"]
-            coinor = os.path.expanduser("~/mumps-coinor/lib")
-            brew_prefix = "/opt/homebrew/opt/brewsci-mumps/lib"
-            brew_x86 = "/usr/local/opt/brewsci-mumps/lib"
-            search_dirs = [d for d in [lib_dir, coinor, brew_prefix, brew_x86] if d]
-        else:
-            names = ["libcoinmumps.so", "libdmumps.so"]
-            coinor = os.path.expanduser("~/mumps-coinor/lib")
-            search_dirs = [d for d in [lib_dir, coinor] if d]
-
-        # Try each directory + name combination, then bare names for PATH
-        for d in search_dirs:
-            if not d:
-                continue
-            for name in names:
-                path = os.path.join(d, name)
-                try:
-                    return ctypes.CDLL(path)
-                except OSError:
-                    pass
+    # Try each directory + name combination, then bare names for PATH
+    for d in search_dirs:
+        if not d:
+            continue
         for name in names:
+            path = os.path.join(d, name)
             try:
-                return ctypes.CDLL(name)
+                return ctypes.CDLL(path)
             except OSError:
                 pass
+    for name in names:
+        try:
+            return ctypes.CDLL(name)
+        except OSError:
+            pass
 
-        raise ImportError(
-            "MUMPS library not found. "
-            "Windows: build coin-or/ThirdParty-Mumps via MSYS2. "
-            "Linux: apt install libmumps-dev or conda install mumps-seq. "
-            "Mac: brew tap brewsci/num && brew install brewsci-mumps. "
-            "Or set MUMPS_LIB_DIR to the directory containing the library."
+    raise ImportError(
+        "MUMPS library not found. "
+        "Windows: build coin-or/ThirdParty-Mumps via MSYS2. "
+        "Linux: apt install libmumps-dev or conda install mumps-seq. "
+        "Mac: brew tap brewsci/num && brew install brewsci-mumps. "
+        "Or set MUMPS_LIB_DIR to the directory containing the library."
+    )
+
+
+class MumpsSolver(LinearSolver):
+    def __init__(self, options, state):
+        self.options = options
+        self.hessian = state.hessian
+
+        self.nrows, self.ncols, self.nnz, self.rowp, self.cols = (
+            self.hessian.get_nonzero_structure()
         )
-
-    def __init__(self, problem):
-        import ctypes
+        diag_indices = self.find_diag_indices(self.rowp, self.cols, self.nrows)
 
         self._ct = ctypes
-        self._libmumps = self._load_mumps_library()
+        self._libmumps = _load_mumps_library()
         self._dmumps_c = self._libmumps.dmumps_c
         self._dmumps_c.restype = None
-
-        self._init_sparse_structure(problem)
 
         # Build COO triplet arrays from CSR (MUMPS uses 1-based COO)
         # Only store lower triangle for sym=2 (symmetric indefinite)
@@ -104,6 +95,11 @@ class MumpsSolver(DirectSparseSolver):
         self._data_map = np.nonzero(lower_mask)[0].astype(np.intc)
         self._nnz_lower = int(lower_mask.sum())
         self._a = np.empty(self._nnz_lower, dtype=np.float64)
+
+        # Map the diagonal indices
+        csr_to_lower = np.full(self.nnz, -1, dtype=np.int32)
+        csr_to_lower[self._data_map] = np.arange(self._nnz_lower, dtype=np.int32)
+        self._diag_indices = csr_to_lower[diag_indices]
 
         # Build the MUMPS struct via ctypes
         self._build_struct()
@@ -150,7 +146,7 @@ class MumpsSolver(DirectSparseSolver):
 
     def _build_struct(self):
         """Build the ctypes Structure matching DMUMPS_STRUC_C (MUMPS 5.8.2)."""
-        ct = self._ct
+        import ctypes as ct
 
         _mumps_fields = [
             # Control
@@ -271,7 +267,7 @@ class MumpsSolver(DirectSparseSolver):
     def _call_mumps(self):
         self._dmumps_c(self._ct.byref(self._mumps))
 
-    def _factorize_current(self):
+    def _factor_current(self):
         if not self._have_symbolic:
             self._mumps.job = 1  # symbolic analysis with actual values
             self._call_mumps()
@@ -288,14 +284,30 @@ class MumpsSolver(DirectSparseSolver):
                 f"infog(2)={self._mumps.infog[1]}"
             )
 
-    def _update_values(self):
-        data = self.hess.get_data()
+    def _update_values(self, hessian, diagonal):
+        data = hessian.get_data()
         self._a[:] = data[self._data_map]
+        self._a[self._diag_indices] += diagonal.get_array()
 
-    def _do_factor(self):
+    def factor(self, hessian, diagonal):
         """Refresh values from self.hess and run MUMPS analysis + factor."""
-        self._update_values()
-        self._factorize_current()
+        self._update_values(hessian, diagonal)
+        self._factor_current()
+
+    def solve(self, bx, px):
+        """Solve the system of equations"""
+        bx.copy_device_to_host()
+        self._rhs[:] = bx.get_array()
+        self._mumps.job = 3
+        self._call_mumps()
+        if self._mumps.infog[0] < 0:
+            raise RuntimeError(f"MUMPS solve failed: infog(1)={self._mumps.infog[0]}")
+        px.get_array()[:] = self._rhs
+        px.copy_host_to_device()
+
+    def inertia_enabled(self):
+        """Mumps can compute the inertia"""
+        return True
 
     def get_inertia(self):
         """Return (n_positive, n_negative) from MUMPS infog(12).
@@ -308,15 +320,9 @@ class MumpsSolver(DirectSparseSolver):
         n_pos = self.nrows - n_neg
         return n_pos, n_neg
 
-    def solve(self, bx, px):
-        bx.copy_device_to_host()
-        self._rhs[:] = bx.get_array()
-        self._mumps.job = 3
-        self._call_mumps()
-        if self._mumps.infog[0] < 0:
-            raise RuntimeError(f"MUMPS solve failed: infog(1)={self._mumps.infog[0]}")
-        px.get_array()[:] = self._rhs
-        px.copy_host_to_device()
+    def set_pivot_tolerance(self, pivtol):
+        """Set the pivot tolerance"""
+        self._mumps.cntl[0] = pivtol
 
     def __del__(self):
         try:

@@ -10,31 +10,42 @@ unblock the solve.
 """
 
 
+class RestorationInfo:
+    success: bool = False
+    iterations: int = 0
+    infeas_initial: float = 0.0
+    infeas_final: float = 0.0
+
+
 class FeasibilityRestoration:
     """Feasibility restoration for filter line search failure."""
 
-    def _restoration_phase(
-        self,
-        inertia_corrector,
-        mult_ind,
-        inner_filter,
-        options,
-        comm_rank,
-        x,
-        diag_base,
-        zero_hessian_indices,
-        zero_hessian_eps,
-    ):
+    def __init__(self, options, problem, optimizer):
+        self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
+
+        # self.filter = Filter()
+
+    def restoration_phase(self, solver, evaluator, state):
         """Feasibility restoration phase.
 
         Returns True if restoration produced a better iterate.
         """
-        max_restore = options["filter_restoration_max_iter"]
-        backtrack = options["backtracking_factor"]
-        max_ls = options["max_line_search_iterations"]
-        tau_min = options["tau_min"]
-        use_adaptive_tau = options["adaptive_tau"]
-        tol = options["convergence_tolerance"]
+        max_restore = self.options["filter_restoration_max_iter"]
+        backtrack = self.options["backtracking_factor"]
+        max_ls = self.options["max_line_search_iterations"]
+        tau_min = self.options["tau_min"]
+        use_adaptive_tau = self.options["adaptive_tau"]
+        tol = self.options["convergence_tolerance"]
+
+        info = RestorationInfo()
+
+        # Minimize 0.5 * ||x - x0||^2 + ||c(x)||^2
+        # subject to the regular bound constraints
+
+        # Clear the filter
+        self.filter.clear()
 
         theta_k = self._compute_filter_theta()
         theta_start = theta_k

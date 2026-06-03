@@ -26,6 +26,7 @@ class SerialVecBackend {
   void axpy(T alpha, const T* d_x) const {}
   void scale(T alpha) {}
   void zero() {}
+  void fill(T value) {}
   void set_values(int n, const int d_idx[], T value) {}
   T* get_device_ptr() { return nullptr; }
   const T* get_device_ptr() const { return nullptr; }
@@ -75,6 +76,10 @@ class Vector {
 
   MemoryLocation get_memory_location() const { return mem_loc; }
 
+  std::shared_ptr<Vector<T>> duplicate() const {
+    return std::make_shared<Vector<T>>(local_size, ext_size, mem_loc);
+  }
+
   void copy_host_to_device() {
     if (mem_loc == MemoryLocation::HOST_AND_DEVICE) {
       backend.copy_host_to_device(array);
@@ -93,11 +98,11 @@ class Vector {
     }
   }
 
-  void copy(const Vector<T>& src) {
-    if (array && src.array) {
-      std::copy(src.array, src.array + size, array);
+  void copy(const std::shared_ptr<Vector<T>> src) {
+    if (array && src->array) {
+      std::copy(src->array, src->array + size, array);
     }
-    backend.copy(src.get_device_array());
+    backend.copy(src->get_device_array());
   }
 
   void zero() {
@@ -107,58 +112,27 @@ class Vector {
     backend.zero();
   }
 
-  void set_random(T low = -1.0, T high = 1.0) {
-    if (array) {
-      std::random_device rd;
-      std::mt19937 gen(rd());
-      std::uniform_real_distribution<T> dis(low, high);
-
-      for (int i = 0; i < size; i++) {
-        array[i] = dis(gen);
-      }
-    }
-  }
-
   template <ExecPolicy policy>
-  void set_values(std::shared_ptr<Vector<int>> indices, const T value) {
-    if constexpr (policy == ExecPolicy::SERIAL ||
-                  policy == ExecPolicy::OPENMP) {
-      int nentries = indices->get_size();
-      const int* idx = indices->get_array();
-      for (int i = 0; i < nentries; i++) {
-        array[idx[i]] = value;
-      }
-    } else {
-      int nentries = indices->get_size();
-      backend.set_values(nentries, indices->get_device_array(), value);
-    }
-  }
-
-  template <ExecPolicy policy>
-  void axpy(T alpha, const Vector<T>& x) {
+  void fill(T value) {
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
       for (int i = 0; i < local_size; i++) {
-        array[i] += alpha * x.array[i];
+        array[i] = value;
       }
     } else {
-      backend.axpy(alpha, x.get_device_array());
+      backend.fill(value);
     }
   }
 
   template <ExecPolicy policy>
-  T dot(const Vector<T>& x) const {
+  void add_scalar(T value) {
     if constexpr (policy == ExecPolicy::SERIAL ||
                   policy == ExecPolicy::OPENMP) {
-      T value = 0.0;
-      if (array && x.array) {
-        for (int i = 0; i < local_size; i++) {
-          value += array[i] * x.array[i];
-        }
+      for (int i = 0; i < local_size; i++) {
+        array[i] += value;
       }
-      return value;
     } else {
-      return backend.dot(x.get_device_array());
+      backend.add_scalar(value);
     }
   }
 
@@ -171,6 +145,170 @@ class Vector {
       }
     } else {
       backend.scale(alpha);
+    }
+  }
+
+  template <ExecPolicy policy>
+  void axpy(T alpha, const std::shared_ptr<Vector<T>> x) {
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      for (int i = 0; i < local_size; i++) {
+        array[i] += alpha * x->array[i];
+      }
+    } else {
+      backend.axpy(alpha, x->get_device_array());
+    }
+  }
+
+  template <ExecPolicy policy>
+  T dot(const std::shared_ptr<Vector<T>> x) const {
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      T value = 0.0;
+      if (array && x->array) {
+        for (int i = 0; i < local_size; i++) {
+          value += array[i] * x->array[i];
+        }
+      }
+      return value;
+    } else {
+      return backend.dot(x->get_device_array());
+    }
+  }
+
+  template <ExecPolicy policy>
+  T maxabs(int& index) {
+    index = -1;
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      T value = 0.0;
+      for (int i = 0; i < local_size; i++) {
+        if (std::fabs(array[i]) > value) {
+          value = std::fabs(array[i]);
+          index = i;
+        }
+      }
+      return value;
+    } else {
+      return backend.maxabs(index);
+    }
+  }
+
+  template <ExecPolicy policy>
+  T abssum() {
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      T value = 0.0;
+      for (int i = 0; i < local_size; i++) {
+        value += std::fabs(array[i]);
+      }
+      return value;
+    } else {
+      return backend.abssum();
+    }
+  }
+
+  template <ExecPolicy policy>
+  void copy_at(std::shared_ptr<Vector<int>> indices,
+               std::shared_ptr<Vector<T>> src) {
+    int nentries = indices->get_local_size();
+    const int* idx = indices->template get_array<policy>();
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      for (int i = 0; i < nentries; i++) {
+        array[idx[i]] = src->array[idx[i]];
+      }
+    } else {
+      backend.copy_at(nentries, idx, src.get_device_array());
+    }
+  }
+
+  template <ExecPolicy policy>
+  void fill_at(std::shared_ptr<Vector<int>> indices, T value) {
+    int nentries = indices->get_local_size();
+    const int* idx = indices->template get_array<policy>();
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      for (int i = 0; i < nentries; i++) {
+        array[idx[i]] = value;
+      }
+    } else {
+      backend.fill_at(nentries, idx, value);
+    }
+  }
+
+  template <ExecPolicy policy>
+  void add_scalar_at(std::shared_ptr<Vector<int>> indices, T value) {
+    int nentries = indices->get_local_size();
+    const int* idx = indices->template get_array<policy>();
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      for (int i = 0; i < nentries; i++) {
+        array[idx[i]] += value;
+      }
+    } else {
+      backend.add_scalar_at(nentries, idx, value);
+    }
+  }
+
+  template <ExecPolicy policy>
+  void scale_at(std::shared_ptr<Vector<int>> indices, T alpha) {
+    int nentries = indices->get_local_size();
+    const int* idx = indices->template get_array<policy>();
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      for (int i = 0; i < size; i++) {
+        array[idx[i]] += alpha;
+      }
+    } else {
+      backend.scale_at(alpha);
+    }
+  }
+
+  template <ExecPolicy policy>
+  void axpy_at(std::shared_ptr<Vector<int>> indices, T alpha,
+               const Vector<T>& x) {
+    int nentries = indices->get_local_size();
+    const int* idx = indices->template get_array<policy>();
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      for (int i = 0; i < nentries; i++) {
+        array[idx[i]] += alpha * x.array[idx[i]];
+      }
+    } else {
+      backend.axpy_at(alpha, x.get_device_array());
+    }
+  }
+
+  template <ExecPolicy policy>
+  void get_values_at(std::shared_ptr<Vector<int>> indices,
+                     std::shared_ptr<Vector<T>> values) {
+    int nentries = indices->get_local_size();
+    const int* idx = indices->template get_array<policy>();
+    T* v = values->template get_array<policy>();
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      for (int i = 0; i < nentries; i++) {
+        v[i] = array[idx[i]];
+      }
+    } else {
+      backend.get_values_at(nentries, idx, v);
+    }
+  }
+
+  template <ExecPolicy policy>
+  void set_values_at(std::shared_ptr<Vector<int>> indices,
+                     std::shared_ptr<Vector<T>> values) {
+    int nentries = indices->get_local_size();
+    const int* idx = indices->template get_array<policy>();
+    const T* v = values->template get_array<policy>();
+    if constexpr (policy == ExecPolicy::SERIAL ||
+                  policy == ExecPolicy::OPENMP) {
+      for (int i = 0; i < nentries; i++) {
+        array[idx[i]] = v[i];
+      }
+    } else {
+      backend.set_values_at(nentries, idx, v);
     }
   }
 
@@ -197,6 +335,7 @@ class Vector {
   const T& operator[](int i) const { return array[i]; }
 
   int get_size() const { return size; }
+  int get_local_size() const { return local_size; }
 
   T* get_array() { return array; }
   const T* get_array() const { return array; }

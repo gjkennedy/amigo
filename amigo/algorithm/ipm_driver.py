@@ -7,67 +7,39 @@ a Newton direction, runs a line search, and handles step acceptance
 or feasibility restoration.
 """
 
-import time
-import numpy as np
+import warnings
 
+# Raw pybind11 classes
+from ..amigo import InteriorPointOptimizer, Vector
+
+# Import from the model
 from ..model import ModelVector
 
-from .default_options import get_default_options
-from .filter_acceptance import Filter
-from .filter_line_search import FilterLineSearch, WatchdogState
-from .merit_line_search import MeritLineSearch
-from .ipm_state import IpmState, StepContext
-
-from .problem_setup import ProblemSetup
-from .iterate_initialization import IterateInitialization
-from .convergence_check import (
-    ConvergenceCheck,
-    CONVERGED,
-    CONVERGED_ACCEPTABLE,
-    DIVERGED,
-    PRECISION_FLOOR,
-)
+# Optimizer imports from algorithm classes
 from .barrier_strategy import make_barrier_strategy
-from .newton_direction import NewtonDirection
-from .optimality_scaling import OptimalityScaling
-from .bound_safeguards import BoundSafeguards
-from .multiplier_initialization import MultiplierInitialization
+from .convergence_check import ConvergenceCheck, CONTINUE
+from .default_options import get_default_options
+from .evaluator import Evaluator
 from .feasibility_restoration import FeasibilityRestoration
-from .iteration_logger import IterationLogger
-from .newton_diagnostics import NewtonDiagnostics
-from .post_optimization import PostOptimization
+from .iterate_initialization import SlackInitializer
+from .iteration_logger import OptimizationLogger
+from .ipm_state import InteriorPointState
+from .line_search import make_line_search
+from .multiplier_initialization import MultiplierInitializer
+from .newton_direction import NewtonStep
+from .solvers import InertiaCorrector, make_solver
 
 
-class Optimizer(
-    ProblemSetup,
-    IterateInitialization,
-    ConvergenceCheck,
-    NewtonDirection,
-    OptimalityScaling,
-    BoundSafeguards,
-    MultiplierInitialization,
-    MeritLineSearch,
-    FilterLineSearch,
-    FeasibilityRestoration,
-    IterationLogger,
-    NewtonDiagnostics,
-    PostOptimization,
-):
-    """Primal-dual interior-point optimizer with filter line search.
-
-    Composes a BarrierStrategy (self.barrier) for the mu update and
-    inherits the remaining algorithmic pieces as mixins.
-    """
+class Optimizer:
+    """Primal-dual interior-point optimizer."""
 
     def __init__(
         self,
-        model,
+        model=None,
         x=None,
-        lower=None,
-        upper=None,
-        solver=None,
+        problem=None,
         comm=None,
-        distribute=False,
+        **kwargs,
     ):
         """Initialize the optimizer.
 
@@ -77,407 +49,204 @@ class Optimizer(
             The amigo model to optimize
         x : array-like, optional
             Initial point
-        lower, upper : array-like, optional
-            Variable bounds
-        solver : Solver, optional
-            Linear solver for the KKT system.
-            May also be a string from ["scipy", "pardiso", "mumps"]
         comm : MPI communicator, optional
             For distributed optimization
-        distribute : bool
-            Whether to distribute the problem
         """
-        self.barrier_param = 1.0
-        self.model = model
-        self.problem = self.model.get_problem()
-        self.comm = comm
-        self.distribute = distribute
-        if self.distribute and self.comm is None:
-            raise ValueError("If problem is distributed, communicator cannot be None")
 
-        self._partition_problem()
-        self._setup_initial_vectors(x, lower, upper)
-        self._fill_slack_bounds()
-        self._distribute_vectors()
-        self._select_solver(solver)
+        if "solver" in kwargs:
+            warnings.warn("Set the solver through the options")
+
+        # Set the model and problem
+        if model is not None:
+            self.model = model
+            self.problem = self.model.get_problem()
+        elif problem is not None:
+            self.model = None
+            self.problem = problem
+        else:
+            raise ValueError("Must provide a model or a problem instance")
+
+        # Set the design vector
+        if isinstance(x, ModelVector):
+            self.x = x.get_vector()
+        elif isinstance(x, Vector):
+            self.x = x
+        else:
+            self.x = self.problem.create_vector()
+
+        x_init = self.problem.get_initial_point()
+        self.x.copy(x_init)
+        self.lower = self.problem.get_lower()
+        self.upper = self.problem.get_upper()
+
+        self.comm = comm
+
+        # Set up the vectors
         self._create_interior_point_backend()
-        self._allocate_working_vectors()
+
+        return
+
+    def _create_interior_point_backend(self):
+        """Create the C++ InteriorPointOptimizer backend and slack mapping."""
+        data_vec = self.problem.get_data_vector()
+        self.x.copy_host_to_device()
+        self.lower.copy_host_to_device()
+        self.upper.copy_host_to_device()
+        data_vec.copy_host_to_device()
+
+        self.optimizer = InteriorPointOptimizer(self.problem)
+        self.vars = self.optimizer.create_opt_vector(self.x)
+        self.update = self.optimizer.create_opt_vector()
+        self.temp = self.optimizer.create_opt_vector()
 
     def get_options(self, options={}):
         return get_default_options(options)
 
+    def get_optimized_point(self):
+        return ModelVector(self.model, x=self.x)
+
     def optimize(self, options={}):
-        """Run the interior-point optimization algorithm.
-
-        Returns a dict with keys "converged", "iterations", "options".
         """
-        start_time = time.perf_counter()
-        comm_rank = self.comm.rank if self.comm is not None else 0
+        The set up of the new class structure:
 
+        All data about the current state of the optimizer (scalars, vectors, Hessian etc.) are
+        stored in the InteriorPointState object. This contains all info about the current design
+        point.
+
+        Evaluator is responsible for evaluating the quantities of interest (gradient, Hessian etc.)
+        for the current state and trial points that may become the current state. Each algorithm
+        is responsible for updating the state object so that its internal state remains consistent.
+
+        FilterLineSearch performs a filter line search
+        """
+
+        # Check and normalize the options dictionary for internal use
         options = self.get_options(options=options)
-        opt_data = {"options": options, "converged": False, "iterations": []}
+
+        # TODO: Where should this go?
+        self.optimizer.relax_bounds(1e-8, options["constr_viol_tol"])
+
+        # Continuation control object, if any
+        continuation_control = options["continuation_control"]
+
+        # Class for evaluating problem-specific quantities
+        evaluator = Evaluator(self.problem, self.optimizer)
+
+        # The interior point state object contains information about the design point, the
+        # gradient and the Hessian of the Lagrangian.
+        state = InteriorPointState(self.x, options, self.problem, self.optimizer)
+
+        # Create the solver depending on options
+        solver = make_solver(options, state)
+
+        # The inertia correction
+        inertia_corrector = InertiaCorrector(options, self.problem, self.optimizer)
+
+        # Initialize the line search algorithm
+        line_search = make_line_search(options, self.problem, self.optimizer)
+
+        # Allocate the Newton step
+        newton_step = NewtonStep(options, self.problem, self.optimizer)
+
+        # Feasibility restoration phase algorithm
+        feasible_resto = FeasibilityRestoration(options, self.problem, self.optimizer)
+
+        # Initialize the barrier strategy correction algorithm
+        barrier_strategy = make_barrier_strategy(options, self.problem, self.optimizer)
+
+        # Initialize the convergence check
+        check = ConvergenceCheck(options, self.problem, self.optimizer)
+
+        # Initialize the logger. The logger takes in additional objects that may
+        # provide logging info via "obj.get_log_info()"
+        objs = [line_search, inertia_corrector]
+        logger = OptimizationLogger(objs, options, self.problem, self.optimizer)
+
+        # Initialize the dual and slack variable values. This utilizes the solver object
+        # to find initial values of the dual variables.
+        slack_init = SlackInitializer(options, self.model, self.problem, self.optimizer)
+        slack_init.initialize_slacks(evaluator, state)
+
+        # Initialize the multipliers
+        multiplier_init = MultiplierInitializer(options, self.problem, self.optimizer)
+        multiplier_init.initialize_multipliers(evaluator, solver, state)
+
+        # Set the initial status
+        status = CONTINUE
+
+        # Initialize the barrier strategy prior to optimization
+        barrier_strategy.initialize(evaluator, state)
 
         max_iters = options["max_iterations"]
-        base_tau = options["fraction_to_boundary"]
-        tau_min = options["tau_min"]
-        use_adaptive_tau = options["adaptive_tau"]
-        tol = options["convergence_tolerance"]
-        compl_inf_tol = options["compl_inf_tol"]
-        record_components = options["record_components"]
-        continuation_control = options["continuation_control"]
-        max_rejections = options["max_consecutive_rejections"]
-        barrier_inc = options["barrier_increase_factor"]
-        initial_barrier = options["initial_barrier_param"]
-        filter_reset_trigger = options["filter_reset_trigger"]
-        max_filter_resets = options["max_filter_resets"]
+        for counter in range(max_iters):
+            # Update the iteration counter
+            state.iter = counter
 
-        self.barrier_param = options["initial_barrier_param"]
-        self.barrier = make_barrier_strategy(self, options)
+            # Evaluate the objective and barrier function
+            evaluator.evaluate_objective_and_barrier(state)
 
-        # Initialization
-        self._initialize_iterate(options, comm_rank)
+            # Evaluate the residuals for the convergence check
+            evaluator.evaluate_residual(state)
 
-        x = self.vars.get_solution()
-        xview = ModelVector(self.model, x=x) if not self.distribute else None
+            # Check for convergence based on the initial point
+            status = check.test_convergence(evaluator, state)
 
-        # Loop state
-        state = IpmState()
-        state.res_norm_mu = self.barrier_param
+            # Log the information about the iteration and the status of all the
+            # internal objects within the optimizer
+            logger.log_iteration(status, state)
 
-        # Inertia corrector + zero-Hessian indices
-        problem_ref = self.mpi_problem if self.distribute else self.problem
-        mult_ind = np.array(problem_ref.get_multiplier_indicator(), dtype=bool)
-        self._mult_ind = mult_ind  # used by _ensure_positive_slacks
-        inertia_corrector = self._build_inertia_corrector(
-            mult_ind, tol, options, comm_rank
-        )
-        zero_hessian_indices, zero_hessian_eps = self._zero_hessian_indices(
-            options, comm_rank
-        )
+            # Break if the check indicates we shouldn't continue
+            if status != CONTINUE:
+                break
 
-        soc_mult_ind = mult_ind if options["second_order_correction"] else None
-
-        # Barrier-strategy step context (shared across iterations; per-iteration
-        # fields i, res_norm, diag_base, filter_monotone_* are updated in-loop)
-        ctx = StepContext(
-            comm_rank=comm_rank,
-            tol=tol,
-            compl_inf_tol=compl_inf_tol,
-            mult_ind=mult_ind,
-            x=x,
-            inertia_corrector=inertia_corrector,
-            zero_hessian_indices=zero_hessian_indices,
-            zero_hessian_eps=zero_hessian_eps,
-        )
-        self.barrier.initialize(ctx)
-
-        # Filter line search state
-        filter_ls = options["filter_line_search"]
-        outer_filter = Filter() if filter_ls else None
-        inner_filter = (
-            Filter(
-                gamma_phi=options["filter_gamma_phi"],
-                gamma_theta=options["filter_gamma_theta"],
-            )
-            if filter_ls
-            else None
-        )
-        if filter_ls:
-            self._filter_theta_0 = None
-
-        # Watchdog
-        watchdog = WatchdogState(self.optimizer)
-        watchdog.trigger = options["watchdog_shortened_iter_trigger"]
-        watchdog.max_trials = options["watchdog_trial_iter_max"]
-
-        # Main loop
-        for i in range(max_iters):
-            # Step A: KKT residual
-            res_norm = self.optimizer.compute_residual(
-                self.barrier_param, self.vars, self.grad, self.res
-            )
-            state.res_norm_mu = self.barrier_param
-            if inertia_corrector:
-                inertia_corrector.update_barrier(self.barrier_param)
-
-            res_arr = np.array(self.res.get_array())
-            theta_res = np.linalg.norm(res_arr[mult_ind])
-            eta_res = np.linalg.norm(res_arr[~mult_ind])
-
-            if filter_ls and self._filter_theta_0 is None:
-                self._filter_theta_0 = self._compute_filter_theta()
-
+            # Callback for the continuation control.
             if continuation_control is not None:
-                continuation_control(i, res_norm)
+                continuation_control(state)
 
-            # Step B: Log
-            elapsed_time = time.perf_counter() - start_time
-            iter_data = self._build_iter_data(
-                i,
-                elapsed_time,
-                res_norm,
-                state.line_iters,
-                state.alpha_x_prev,
-                state.alpha_z_prev,
-                state.x_index_prev,
-                state.z_index_prev,
-                inertia_corrector,
-                theta_res,
-                eta_res,
-                filter_ls,
-                outer_filter,
-                options,
-                mult_ind,
-            )
-            if comm_rank == 0:
-                self.write_log(i, iter_data)
-            iter_data["x"] = {}
-            if xview is not None:
-                for name in record_components:
-                    iter_data["x"][name] = xview[name].tolist()
-            opt_data["iterations"].append(iter_data)
+            # Perform an update of the barrier parameter prior to any factorization or step
+            barrier_info = barrier_strategy.update_barrier(evaluator, state)
 
-            # Step C: Convergence
-            status, _, state.acceptable_counter, state.precision_floor_count = (
-                self._check_convergence(
-                    i,
-                    options,
-                    mult_ind,
-                    res_norm,
-                    state.prev_res_norm,
-                    state.acceptable_counter,
-                    state.precision_floor_count,
-                    comm_rank,
-                )
-            )
-            if status == CONVERGED:
-                opt_data["converged"] = True
-                break
-            if status == CONVERGED_ACCEPTABLE:
-                opt_data["converged"] = True
-                opt_data["acceptable"] = True
-                break
-            if status == PRECISION_FLOOR:
-                opt_data["converged"] = True
-                opt_data["acceptable"] = True
-                opt_data["precision_floor"] = True
-                break
-            if status == DIVERGED:
-                break
-            state.prev_res_norm = res_norm
+            # Let the line search object determine if a reset is appropriate based on the barrier parameter
+            # update. For instance, this call may reset the filter.
+            line_search.reset_on_new_barrier(state, barrier_info)
 
-            # Step D: Barrier update + direction
-            step_rejected = False
+            # Factor the KKT system considering the inertia.
+            # TODO: Implement a inertia info class
+            factor_ok = inertia_corrector.factor_for_inertia(solver, evaluator, state)
 
-            # Zero-step recovery (non-inertia path only)
-            if not inertia_corrector:
-                state.zero_step_count = self.barrier.handle_zero_step_recovery(
-                    i,
-                    state.alpha_x_prev,
-                    state.alpha_z_prev,
-                    state.zero_step_count,
-                    comm_rank,
+            do_feasible_resto = True
+            if factor_ok:
+                # Compute the direction and store in state.step. This should be a descent direction
+                # because of the inertia check
+                newton_step.compute_step(solver, evaluator, state)
+
+                # Using the same factorization and solver, assess whether a correction step is required
+                # and compute it.
+                barrier_strategy.add_step_correction(solver, evaluator, state)
+
+                # Perform a line search along the step direction
+                line_search_info = line_search.line_search(solver, evaluator, state)
+
+                # Assess what happened after the line search
+                barrier_strategy.update_after_line_search(
+                    line_search_info, evaluator, state
                 )
 
-            # Barrier diagonal Sigma = Z/S
-            self.optimizer.compute_diagonal(self.vars, self.diag)
-            self.diag.copy_device_to_host()
-            diag_base = self.diag.get_array().copy()
+                if line_search_info.success:
+                    do_feasible_resto = False
 
-            barrier_before = self.barrier_param
+            # If the line search was not successful, perform feasibility restoration
+            if do_feasible_resto:
+                warnings.warn("Feasibility restoration phase not implemented")
+                # feasible_resto.restoration_phase(solver, evaluator, state)
 
-            ctx.i = i
-            ctx.res_norm = res_norm
-            ctx.diag_base = diag_base
-            ctx.filter_monotone_mode = state.filter_monotone_mode
-            ctx.filter_monotone_mu = state.filter_monotone_mu
-            factorize_ok = self.barrier.step(ctx)
-            state.filter_monotone_mu = ctx.filter_monotone_mu
+        else:
+            # The optimization for loop completed normally, so we did not converge
+            # Check the convergence status
+            state.iter = max_iters
+            status = check.test_convergence(evaluator, state)
 
-            # Reset line search state when mu changed
-            if self.barrier_param != barrier_before:
-                if inertia_corrector:
-                    inertia_corrector.update_barrier(self.barrier_param)
-                if filter_ls and inner_filter is not None:
-                    inner_filter.clear()
-                    self._filter_theta_0 = self._compute_filter_theta()
-                watchdog.reset()
-                state.count_successive_filter_rejections = 0
-                state.filter_reset_count = 0
+            # Log the iteration
+            logger.log_iteration(status, state)
 
-            # Inertia correction failed: reject, increase barrier if needed
-            if not factorize_ok:
-                step_rejected = True
-                state.consecutive_rejections += 1
-                if comm_rank == 0:
-                    print(
-                        f"  Inertia correction FAILED "
-                        f"({state.consecutive_rejections}x)"
-                    )
-                self.barrier_param = barrier_before
-                state.line_iters = 0
-                state.alpha_x_prev = state.alpha_z_prev = 0.0
-                state.x_index_prev = state.z_index_prev = -1
-                state.consecutive_rejections = (
-                    self.barrier.increase_barrier_on_rejections(
-                        state.consecutive_rejections,
-                        max_rejections,
-                        barrier_inc,
-                        initial_barrier,
-                        comm_rank,
-                    )
-                )
-                self.barrier.on_barrier_increased()
-                continue
-
-            # Optional Newton diagnostics
-            if options["check_update_step"]:
-                self._run_check_update_diagnostics(comm_rank)
-
-            rhs_norm = self.optimizer.compute_residual(
-                self.barrier_param, self.vars, self.grad, self.res
-            )
-            if options["check_update_step"] and comm_rank == 0 and i > 0:
-                self._print_newton_diagnostics(rhs_norm, state.res_norm_mu, mult_ind)
-
-            # Compute maximum step sizes from fraction-to-boundary
-            tau = (
-                self._compute_adaptive_tau(self.barrier_param, tau_min)
-                if use_adaptive_tau
-                else base_tau
-            )
-            alpha_x, x_index, alpha_z, z_index = self.optimizer.compute_max_step(
-                tau, self.vars, self.update
-            )
-            if options["equal_primal_dual_step"]:
-                alpha_x = alpha_z = min(alpha_x, alpha_z)
-
-            # Step E: Line search
-            if filter_ls:
-                alpha, state.line_iters, step_accepted, filter_rejected = (
-                    self._filter_line_search_with_watchdog(
-                        alpha_x,
-                        alpha_z,
-                        inner_filter,
-                        options,
-                        comm_rank,
-                        tau,
-                        soc_mult_ind,
-                        watchdog,
-                        factorize_ok,
-                    )
-                )
-
-                # Filter reset heuristic
-                if step_accepted:
-                    if filter_rejected:
-                        state.count_successive_filter_rejections += 1
-                    else:
-                        state.count_successive_filter_rejections = 0
-                    if (
-                        state.count_successive_filter_rejections >= filter_reset_trigger
-                        and state.filter_reset_count < max_filter_resets
-                    ):
-                        inner_filter.clear()
-                        state.filter_reset_count += 1
-                        state.count_successive_filter_rejections = 0
-                        if comm_rank == 0:
-                            print(
-                                f"  Filter reset "
-                                f"({state.filter_reset_count}/{max_filter_resets})"
-                            )
-
-                # Step F: Restoration if LS failed
-                if not step_accepted:
-                    restored = self._restoration_phase(
-                        inertia_corrector,
-                        mult_ind,
-                        inner_filter,
-                        options,
-                        comm_rank,
-                        x,
-                        diag_base,
-                        zero_hessian_indices,
-                        zero_hessian_eps,
-                    )
-                    if restored:
-                        step_accepted = True
-                        state.line_iters = 0
-                        watchdog.shortened_iter = 0
-                    else:
-                        step_rejected = True
-                        state.consecutive_rejections += 1
-                        if comm_rank == 0:
-                            print(
-                                f"  Filter+Restoration REJECTED "
-                                f"({state.consecutive_rejections}x)"
-                            )
-
-                if step_accepted:
-                    n_adj = self._ensure_positive_slacks(self.vars, self.barrier_param)
-                    if n_adj > 0 and comm_rank == 0:
-                        print(f"  Slack adjustment: {n_adj} variable(s)")
-                    self.optimizer.reset_bound_multipliers(
-                        self.barrier_param,
-                        1e10,
-                        self.vars,
-                    )
-                    self._update_gradient(self.vars.get_solution())
-            else:
-
-                def _reject_step():
-                    nonlocal step_rejected
-                    step_rejected = True
-                    state.consecutive_rejections += 1
-
-                reject_cb = _reject_step if inertia_corrector else None
-                alpha, state.line_iters, step_accepted = self._line_search(
-                    alpha_x,
-                    alpha_z,
-                    options,
-                    comm_rank,
-                    tau=tau,
-                    mult_ind=soc_mult_ind,
-                    reject_callback=reject_cb,
-                )
-
-            # Step G: Post-step update
-            if step_rejected:
-                state.alpha_x_prev = state.alpha_z_prev = 0.0
-                state.x_index_prev = state.z_index_prev = -1
-                self.barrier_param = barrier_before
-
-                self.barrier.on_step_rejected(ctx)
-
-                state.consecutive_rejections = (
-                    self.barrier.increase_barrier_on_rejections(
-                        state.consecutive_rejections,
-                        max_rejections,
-                        barrier_inc,
-                        initial_barrier,
-                        comm_rank,
-                    )
-                )
-                self.barrier.on_barrier_increased()
-            else:
-                state.alpha_x_prev = alpha * alpha_x
-                state.alpha_z_prev = alpha_z if filter_ls else alpha * alpha_z
-                state.x_index_prev = x_index
-                state.z_index_prev = z_index
-                state.consecutive_rejections = 0
-
-                if filter_ls and not watchdog.in_watchdog:
-                    if alpha == 1.0 or state.line_iters == 1:
-                        watchdog.shortened_iter = 0
-                    else:
-                        watchdog.shortened_iter += 1
-
-        if comm_rank == 0 and not opt_data.get("converged", False):
-            print(f"\n{'='*70}")
-            print(f"  Amigo did NOT converge (max iterations: {max_iters})")
-            print(f"{'='*70}")
-            print(f"  Residual                {res_norm:>20.10e}")
-            print(f"  Barrier parameter       {self.barrier_param:>20.10e}")
-            print(f"{'='*70}")
-
-        return opt_data
+        return logger.get_data()

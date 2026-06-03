@@ -54,7 +54,7 @@ class FixedVariables {
    */
   template <ExecPolicy policy, typename T>
   void zero_rows(std::shared_ptr<Vector<T>> vec) {
-    vec->template set_values<policy>(vec_zero_indices, T(0.0));
+    vec->template fill_at<policy>(vec_zero_indices, T(0.0));
   }
 
   /**

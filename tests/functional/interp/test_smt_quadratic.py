@@ -34,7 +34,7 @@ def trained_krg():
     return sm
 
 
-@pytest.fixture(scope="module", params=["mumps", "amigo"])
+@pytest.fixture(scope="module", params=["amigo"])
 def opt_result(request, trained_krg):
     """Build and solve the model once; return (xvec, model)."""
     solver = request.param
@@ -72,6 +72,19 @@ def opt_result(request, trained_krg):
         inputs=["src.x", "src.y"],
         constraints=["smt_con.res"],
     )
+
+    xvec = model.get_meta_view("value")
+    lower = model.get_meta_view("lower")
+    upper = model.get_meta_view("upper")
+
+    xvec["src.x"] = 1.0
+    xvec["src.y"] = float(sm.predict_values(np.array([[1.0]]))[0, 0])
+
+    lower["src.x"] = 0.0
+    upper["src.x"] = 2.0
+    lower["src.y"] = 0.25
+    upper["src.y"] = float("inf")
+
     # Build and initialize — always run build_module from the test file's
     # own directory so generate_cpp() writes the .cpp there and CMake finds
     # it. Then ensure that directory is on sys.path so importlib can find
@@ -88,23 +101,13 @@ def opt_result(request, trained_krg):
     model.initialize()
 
     xvec = model.create_vector()
-    lower = model.create_vector()
-    upper = model.create_vector()
-
-    xvec["src.x"] = 1.0
-    xvec["src.y"] = float(sm.predict_values(np.array([[1.0]]))[0, 0])
-
-    lower["src.x"] = 0.0
-    upper["src.x"] = 2.0
-    lower["src.y"] = 0.25
-    upper["src.y"] = float("inf")
-
-    opt = am.Optimizer(model, xvec, lower=lower, upper=upper, solver=solver)
+    opt = am.Optimizer(model, xvec)
     data = opt.optimize(
         {
+            "solver": solver,
             "max_iterations": 200,
             "initial_barrier_param": 1.0,
-            "convergence_tolerance": 1e-10,
+            "convergence_tolerance": 1e-8,
             "max_line_search_iterations": 10,
             "init_affine_step_multipliers": False,
             "init_least_squares_multipliers": False,

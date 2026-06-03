@@ -13,83 +13,69 @@ helpers on self.opt (_factorize_kkt, _find_direction, etc.).
 from abc import ABC, abstractmethod
 
 
-class BarrierStrategy(ABC):
-    """Abstract base for barrier-parameter update strategies."""
+class BarrierInfo:
+    new_barrier: bool = False
+    mu_new: float = 0.0
+    mu_old: float = 0.0
 
-    def __init__(self, opt, options):
-        self.opt = opt
+
+class BarrierStrategy(ABC):
+    def __init__(self, options={}):
         self.options = options
 
+    def initialize(self, evaluator, state):
+        """Initialize the barrier strategy from the initial point"""
+        pass
+
     @abstractmethod
-    def step(self, ctx):
-        """Update barrier, factorize KKT, compute Newton direction.
+    def update_barrier(self, evaluator, state) -> BarrierInfo:
+        """Update the barrier parameter prior to factoring the KKT matrix"""
+        pass
 
-        Parameters
-        ----------
-        ctx : StepContext
-            Per-iteration context (see ipm_driver).
+    def add_step_correction(self, solver, evalutor, state):
+        """Add the correction to the step - relevant for Mehrotra P/C steps"""
+        pass
 
-        Returns
-        -------
-        factorize_ok : bool
-            False if inertia correction failed.
+    def update_after_line_search(self, info, evaluator, state):
         """
+        Update any internal state required after the results of a line search
 
-    def initialize(self, ctx):
-        """One-shot init at the start of optimize().  Override if needed."""
-
-    def on_step_rejected(self, ctx):
-        """Run after the line search rejects the step."""
-
-    def on_barrier_increased(self):
-        """Run after increase_barrier_on_rejections() raised mu."""
-
-    def handle_zero_step_recovery(
-        self, i, alpha_x_prev, alpha_z_prev, zero_step_count, comm_rank
-    ):
-        """Escape stuck iterates by bumping mu when tiny steps repeat.
-
-        Only active on the non-inertia-corrector path.  After three
-        consecutive iterations with max(alpha_x, alpha_z) < 1e-10,
-        scale mu up by 10x (capped at 1.0).
+        Default behavior is to adjust the barrier parameter if small steps are taken
         """
-        if i > 0 and max(alpha_x_prev, alpha_z_prev) < 1e-10:
-            zero_step_count += 1
-            if zero_step_count >= 3:
-                old = self.opt.barrier_param
-                self.opt.barrier_param = min(old * 10.0, 1.0)
-                if comm_rank == 0 and self.opt.barrier_param != old:
-                    print(
-                        f"  Zero step recovery: barrier "
-                        f"{old:.2e} -> {self.opt.barrier_param:.2e}"
-                    )
-                zero_step_count = 0
-        else:
-            zero_step_count = 0
-        return zero_step_count
+        if state.iter > 0 and info.alpha_primal < 1e-10:
+            initial_barrier = self.options["initial_barrier_param"]
+            state.mu = min(10.0 * state.mu, initial_barrier)
 
-    def increase_barrier_on_rejections(
-        self,
-        consecutive_rejections,
-        max_rejections,
-        barrier_inc,
-        initial_barrier,
-        comm_rank,
-    ):
-        """Increase mu after max_rejections consecutive rejections."""
-        if consecutive_rejections >= max_rejections:
-            new_barrier = min(self.opt.barrier_param * barrier_inc, initial_barrier)
-            if new_barrier > self.opt.barrier_param:
-                if comm_rank == 0:
-                    print(
-                        f"  Barrier increased: {self.opt.barrier_param:.2e} -> "
-                        f"{new_barrier:.2e}"
-                    )
-                self.opt.barrier_param = new_barrier
-            elif comm_rank == 0:
-                print(
-                    f"  Barrier at max ({self.opt.barrier_param:.2e}), "
-                    f"cannot increase further"
-                )
-            return 0
-        return consecutive_rejections
+            # Invalidate the residual and step
+            state.residual_current = False
+            state.step_current = False
+
+
+class MonotoneBarrierStrategy(BarrierStrategy):
+    def __init__(self, options, problem, optimizer):
+        super().__init__(options)
+        self.options = options
+        self.problem = problem
+        self.optimizer = optimizer
+
+    def update_barrier(self, evaluator, state):
+        info = BarrierInfo()
+
+        opt_tol = self.options["convergence_tolerance"]
+        relative_tol = self.options["barrier_progress_tol"]
+        frac = self.options["monotone_barrier_fraction"]
+
+        if state.residual_norm < relative_tol * state.mu:
+            mu_new = max(state.mu * frac, frac * opt_tol)
+
+            info.new_barrier = True
+            info.mu_old = state.mu
+            info.mu_new = mu_new
+
+            # Update the barrier parameter. Invalidate the residuals and the step
+            # (if any) because the barrier has changed
+            state.mu = mu_new
+            state.residual_current = False
+            state.step_current = False
+
+        return info
