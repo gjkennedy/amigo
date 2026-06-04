@@ -266,7 +266,7 @@ indeps.add_output("h", shape=nelems, val=0.1)
 opt_options = {
     "max_iterations": 500,
     "barrier_strategy": "heuristic",
-    "convergence_tolerance": 1e-6,
+    "convergence_tolerance": 1e-5,
     "initial_barrier_param": 0.1,
 }
 

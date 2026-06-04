@@ -40,8 +40,8 @@ class beam_element(am.Component):
 
     def __init__(self):
         super().__init__()
-        self.add_input("v", shape=(2,), value=0.0)
-        self.add_input("t", shape=(2,), value=0.0)
+        self.add_input("v", shape=(2,), value=0.0, lower=-10, upper=10.0)
+        self.add_input("t", shape=(2,), value=0.0, lower=-10, upper=10.0)
         # self.add_input("h", value=0.1)
         self.add_data("h", value=0.1)
         # thickness Optimization
@@ -360,17 +360,6 @@ indeps.add_output("beam_element_h", shape=nelems, val=0.1)
 
 # Create fresh vectors for OpenMDAO optimization
 x_om = model.create_vector()
-lower_om = model.create_vector()
-upper_om = model.create_vector()
-
-# Initial guess
-x_om[:] = 0.0
-
-# Set bounds
-lower_om["src.v"] = -10.0
-upper_om["src.v"] = 10.0
-lower_om["src.t"] = -10.0
-upper_om["src.t"] = 10.0
 
 # Amigo Optimizer - outputs compliance and total volume
 prob.model.add_subsystem(
@@ -378,10 +367,10 @@ prob.model.add_subsystem(
     am.ExplicitOpenMDAOPostOptComponent(
         data=["beam_element.h"],
         output=["comp.c", "vol_comp.vol"],
+        data_mapping={"beam_element.h": "h"},
+        output_mapping={"comp.c": "c", "vol_con.con[0]": "con"},
         model=model,
         x=x_om,
-        lower=lower_om,
-        upper=upper_om,
     ),
 )
 

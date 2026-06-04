@@ -76,8 +76,7 @@ class Optimizer:
         else:
             self.x = self.problem.create_vector()
 
-        x_init = self.problem.get_initial_point()
-        self.x.copy(x_init)
+        self.x.copy(self.problem.get_initial_point())
         self.lower = self.problem.get_lower()
         self.upper = self.problem.get_upper()
 
@@ -132,7 +131,7 @@ class Optimizer:
         options = self.get_options(options=options)
 
         # TODO: Where should this go?
-        self.optimizer.relax_bounds(1e-8, options["constr_viol_tol"])
+        # self.optimizer.relax_bounds(1e-8, options["constr_viol_tol"])
 
         # Continuation control object, if any
         continuation_control = options["continuation_control"]
@@ -169,6 +168,10 @@ class Optimizer:
         # provide logging info via "obj.get_log_info()"
         objs = [line_search, inertia_corrector]
         logger = OptimizationLogger(objs, options, self.problem, self.optimizer)
+
+        # Set the initial point
+        self.x.copy(self.problem.get_initial_point())
+        print(self.x.get_array())
 
         # Initialize the dual and slack variable values. This utilizes the solver object
         # to find initial values of the dual variables.
