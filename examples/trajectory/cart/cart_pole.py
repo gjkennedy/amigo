@@ -203,11 +203,13 @@ def create_cart_model(module_name="cart_pole", final_time=2.0, num_time_steps=10
     # Link the outputs
     model.link("kin.ke[1:]", "kin.ke[0]")
 
-    # Set the initial point data
-    model.set_meta("value", "cart.q[:, 0]", np.linspace(0, 2.0, num_time_steps + 1))
-    model.set_meta("value", "cart.q[:, 1]", np.linspace(0, np.pi, num_time_steps + 1))
-    model.set_meta("value", "cart.q[:, 2]", 1.0)
-    model.set_meta("value", "cart.q[:, 3]", 1.0)
+    # Set the initial point by using a view of the initial values. This view acts
+    # like a vector, but sets the values into the staged model
+    x = model.get_meta_view("value")
+    x["cart.q[:, 0]"] = np.linspace(0, 2.0, num_time_steps + 1)
+    x["cart.q[:, 1]"] = np.linspace(0, np.pi, num_time_steps + 1)
+    x["cart.q[:, 2]"] = 1.0
+    x["cart.q[:, 3]"] = 1.0
 
     return model
 
@@ -266,26 +268,25 @@ opt_options = {
     "filter_line_search": True,
 }
 
-for opt_iter in range(4):
-    # Get the design variables
-    x = model.create_vector()
+# Get the design variables
+x = model.create_vector()
 
-    # Serialize the model (requires serialize method)
-    if opt_iter == 0:
-        with open("cart_pole_model.json", "w") as fp:
-            json.dump(model.serialize(), fp, indent=2)
+# Serialize the entire model
+with open("cart_pole_model.json", "w") as fp:
+    json.dump(model.serialize(), fp, indent=2)
 
-    # Set up the optimizer
-    opt = am.Optimizer(model, x=x)
+# Set up the optimizer
+opt = am.Optimizer(model, x=x)
 
-    # Optimize
-    opt_data = opt.optimize(opt_options)
+# Optimize
+opt_data = opt.optimize(opt_options)
 
-    opt_data["num_time_steps"] = args.num_time_steps
-    opt_data["num_variables"] = model.num_variables
-    opt_data["num_constraints"] = model.num_constraints
+opt_data["num_time_steps"] = args.num_time_steps
+opt_data["num_variables"] = model.num_variables
+opt_data["num_constraints"] = model.num_constraints
 
-# Copy the solution from the device to host
+# Copy the solution from the device to host if we've been
+# running the model on the GPU
 x.copy_device_to_host()
 
 # Print objective value

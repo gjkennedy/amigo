@@ -269,7 +269,7 @@ class Optimizer:
         """Evaluate model outputs at the final iterate."""
 
         if output is None:
-            if self.model is None:
+            if self.model is not None:
                 output = self.model.create_output_vector()
             else:
                 output = self.problem.create_output_vector()
