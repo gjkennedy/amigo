@@ -283,7 +283,7 @@ model.link("vol_comp.vol[1:]", "vol_comp.vol[0]")
 #         define_macros=define_macros,
 #         debug=args.use_debug,
 #     )
-model.build_module(debug=True)
+model.build_module()
 model.initialize()
 
 # Post optimality
