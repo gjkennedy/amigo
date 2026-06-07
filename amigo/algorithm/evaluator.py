@@ -9,6 +9,11 @@ class Evaluator:
         # Create a temporary constraint vector for later usage
         self.temp_con = self.problem.create_constraint_vector()
 
+        # Initialize the number of element counts
+        self.num_primal, self.num_constraints, self.num_bounds = (
+            self.optimizer.get_kkt_element_counts()
+        )
+
     def evaluate_gradient(self, state):
         """Evaluate the gradient at the current point and store in the state"""
         if not state.gradient_current:
@@ -65,10 +70,11 @@ class Evaluator:
         # Restore the dual variable values
         x.set_values_at(con_indices, self.temp_con)
 
-        barrier = self.optimizer.compute_barrier_log_sum(mu, vars)
+        # Evaluate the log barrier term
+        barrier = self.optimizer.compute_log_barrier(mu, vars)
 
-        # Evaluate the gradient
-        infeas = self.optimizer.compute_constraint_violation_1norm(vars, grad)
+        # Compute the infeasibility from the gradient
+        infeas = self.optimizer.compute_infeasibility(grad)
 
         return fobj, barrier, infeas
 
@@ -79,76 +85,85 @@ class Evaluator:
         if not state.step_current:
             raise ValueError("Step not current at this point")
 
+        xtmp = self.problem.create_vector()
+        gtmp = self.problem.create_vector()
+
+        # Copy the design variable values
+        xtmp.copy(state.current.get_solution())
+
+        # Zero the multipliers
+        con_indices = self.problem.get_constraint_indices()
+        xtmp.fill_at(con_indices, 0.0)
+
+        # Evaluate the gradient of the objective function alone at the current point
+        self.problem.gradient(1.0, xtmp, gtmp)
+
         update = state.step.get_solution()
-        deriv = self.optimizer.compute_barrier_dphi(
-            state.mu, state.current, state.step, state.residual, update, state.diagonal
+        deriv = self.problem.dot(update, gtmp)
+
+        deriv += self.optimizer.compute_log_barrier_derivative(
+            state.mu, state.current, state.step
         )
+
         return deriv
 
+    def evaluate_residual_from_point(self, mu, vars, grad, res):
+        return self.optimizer.compute_residual(mu, vars, grad, res)
+
     def evaluate_residual(self, state):
-        if not state.gradient_current:
-            self.evaluate_gradient(state)
+        if not state.residual_current:
+            if not state.gradient_current:
+                self.evaluate_gradient(state)
 
-        # Evaluate the residual and update the residual norm
-        state.residual_norm = self.optimizer.compute_residual(
-            state.mu, state.current, state.gradient, state.residual
-        )
+            # Evaluate the residual and update the residual norm
+            state.residual_norm = self.evaluate_residual_from_point(
+                state.mu, state.current, state.gradient, state.residual
+            )
 
-        # Now compute the infeasibilities
-        state.dual_infeas, state.primal_infeas, state.complementarity = (
-            self.optimizer.compute_kkt_error_mu(0.0, state.current, state.gradient)
-        )
+            # Now compute the infeasibilities
+            state.dual_infeas, state.primal_infeas, state.complementarity = (
+                self.optimizer.compute_kkt_error(0.0, state.current, state.gradient)
+            )
 
-        # Compute the scaling
-        s_d_conv, s_c_conv = self._compute_optimality_scaling(state)
-        state.kkt_error = max(
-            state.dual_infeas / s_d_conv,
-            state.primal_infeas,
-            state.complementarity / s_c_conv,
-        )
+            # Compute the scaling
+            s_d_conv, s_c_conv = self.compute_optimality_scaling(state)
+            state.kkt_error = max(
+                state.dual_infeas / s_d_conv,
+                state.primal_infeas,
+                state.complementarity / s_c_conv,
+            )
+
+            state.residual_current = True
 
         return
 
-    def _compute_optimality_scaling(self, state):
+    def compute_optimality_scaling(self, state, s_max=100.0):
         """Compute optimality error scaling factors (s_d, s_c)."""
-        # TODO: move to backend: backend.optimality_scaling() that returns
-        # (s_d, s_c) without reading zl/zu/bounds from Python.
-        s_max = 100.0
 
         # Get the vectors
         zl = state.current.get_zl()
         zu = state.current.get_zu()
         z_asum = self.problem.abssum(zl) + self.problem.abssum(zu)
 
-        # Get the lower/upper bounds, copy them to the host. Need to fix this
-        lbx = self.optimizer.get_lbx()
-        ubx = self.optimizer.get_ubx()
-        lbx_array = lbx.get_array()
-        ubx_array = ubx.get_array()
-
-        n_bounds = int(np.sum(np.isfinite(lbx_array)) + np.sum(np.isfinite(ubx_array)))
-
         # Get the sum of the absolute values of the multipliers
         con_indices = self.problem.get_constraint_indices()
-        y = self.problem.create_constraint_vector()
-        x = state.current.get_solution()
-        x.get_values_at(con_indices, y)
-        y_asum = self.problem.abssum(y)
 
-        n_constraints = self.optimizer.get_num_constraints()
+        x = state.current.get_solution()
+        x.get_values_at(con_indices, self.temp_con)
+        y_asum = self.problem.abssum(self.temp_con)
 
         # s_c: bound multiplier scaling
-        if n_bounds == 0:
+        if self.num_bounds == 0:
             s_c = 1.0
         else:
-            s_c = max(s_max, z_asum / n_bounds) / s_max
+            s_c = max(s_max, z_asum / self.num_bounds) / s_max
 
         # s_d: dual (stationarity) scaling
-        n_all = n_constraints + n_bounds
-        if n_all == 0:
+        num_total = self.num_constraints + self.num_bounds
+        if num_total == 0:
             s_d = 1.0
         else:
-            s_d = max(s_max, (y_asum + z_asum) / n_all) / s_max
+            s_d = max(s_max, (y_asum + z_asum) / num_total) / s_max
 
         return s_d, s_c
 

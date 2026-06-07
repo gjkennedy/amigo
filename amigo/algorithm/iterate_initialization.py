@@ -22,7 +22,7 @@ class SlackInitializer:
         x.fill_at(con_indices, 0.0)
 
         # Initialize the slack variables
-        self.optimizer.initialize_duals_and_slacks(state.mu, state.current)
+        self.optimizer.initialize_duals(state.mu, state.current)
 
         # Invalidate the gradient because we just changed the slack and bound variable values
         state.invalidate()
@@ -51,7 +51,7 @@ class SlackInitializer:
 
             # Re-initialize the sl, su and zl and zu values. These have changed because
             # we just set the primal slack variables in x.
-            self.optimizer.initialize_duals_and_slacks(state.mu, state.current)
+            self.optimizer.initialize_duals(state.mu, state.current)
 
             # Everything is now invalid because we updated the primal-dual point
             state.invalidate()

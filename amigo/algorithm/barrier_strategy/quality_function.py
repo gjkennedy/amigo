@@ -64,7 +64,6 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
 
         # Globalization state
         self.free_mode = True
-        self.monotone_mu = None
         self.refs = []  # kkt-error reference values
         self.glob_filter = []  # (f, theta) filter for obj-constr-filter
         self.init_dual_inf = -1.0
@@ -123,6 +122,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
                 info.new_barrier = self._monotone_reduce(state)
 
         if self.free_mode:
+            info.new_barrier = True
             glob = self.options["adaptive_mu_globalization"]
             if glob == "never-monotone" or self._sufficient_progress(evaluator, state):
                 self._remember_point(evaluator, state)
@@ -175,6 +175,8 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
 
             state.invalidate(grad=False, hess=False)
 
+        return
+
     def _initialize_bounds_once(self, evaluator, state):
         """Populate mu bounds and initial-infeasibility refs on first call."""
 
@@ -188,22 +190,33 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
             avg_comp_init, _ = evaluator.evaluate_complementarity(state)
             self.mu_max = options["mu_max_fact"] * max(avg_comp_init, 1.0)
         if self.init_dual_inf < 0:
-            d0, p0, _ = self.optimizer.compute_kkt_error_mu(
-                0.0, state.current, state.gradient
-            )
+            evaluator.evaluate_residual(state)
             self.init_dual_inf = max(1.0, state.dual_infeas)
             self.init_primal_inf = max(1.0, state.primal_infeas)
 
     def _monotone_reduce(self, state):
         """Monotone mu reduction when subproblem is solved."""
 
-        btf = self.options["barrier_tol_factor"]
-        # barrier_err = state.kkt_error
-        # if barrier_err > btf * state.mu:
+        # relative_tol = self.options["barrier_progress_tol"]
+        # if state.kkt_error < relative_tol * state.mu:
+        #     opt_tol = self.options["convergence_tolerance"]
+        #     frac = self.options["monotone_barrier_fraction"]
+        #     mu_new = max(frac * state.mu, frac * opt_tol)
+
+        #     # Update the barrier parameter. Invalidate the residuals and the step
+        #     # (if any) because the barrier has changed
+        #     state.mu = mu_new
+
+        #     # Only the gradient and hessian retain their status
+        #     state.invalidate(grad=False, hess=False)
+
+        #     return True
+        # else:
         #     return False
 
-        relative_tol = self.options["barrier_progress_tol"]
-        if state.residual_norm > relative_tol * state.mu:
+        btf = self.options["barrier_tol_factor"]
+        barrier_err = state.kkt_error
+        if barrier_err > btf * state.mu:
             return False
 
         kmu = self.options["mu_linear_decrease_factor"]
@@ -234,7 +247,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
 
         state.mu = mu_new
         self.monotone_mu = mu_new
-        state.invalidate(grad=False, hess=False)
+        state.invalidate(grad=False, hess=False, step=False)
 
         if state.comm_rank == 0:
             print(f"  QF -> monotone: mu_bar={mu_new:.3e} (avg_comp={avg_c:.3e})")
@@ -298,7 +311,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         factor = self.options["adaptive_mu_safeguard_factor"]
         if factor == 0.0:
             return 0.0
-        d_inf, p_inf, _ = self.optimizer.compute_kkt_error_mu(
+        d_inf, p_inf, _ = self.optimizer.compute_kkt_error(
             0.0, state.current, state.gradient
         )
         safe = max(
@@ -315,7 +328,7 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         # one backend.kkt_quality(options) call.
 
         dual_sq, primal_sq, comp_sq = self.optimizer.compute_kkt_error(
-            state.current, state.gradient
+            0.0, state.current, state.gradient
         )
         qf = dual_sq * self.sd + primal_sq * self.sp + comp_sq * self.sc
 
@@ -352,11 +365,13 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         mu_nat = avg_comp
 
         # Affine (mu=0) and centering (mu=avg_comp) solves -> one factor
-        self.optimizer.compute_residual(
+        evaluator.evaluate_residual_from_point(
             0.0, state.current, state.gradient, state.residual
         )
+
+        # Evaluate the KKT error
         dual_inf, primal_inf, _ = self.optimizer.compute_kkt_error(
-            state.current, state.gradient
+            0.0, state.current, state.gradient
         )
         # Solve for the update with mu = 0
         solver.solve(state.residual, self.px)
@@ -371,6 +386,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
 
         # Set dpx = px(mu = average) - px(mu = 0)
         self.dpx.axpy(-1.0, self.px)
+
+        # Invalidate
+        state.invalidate(grad=False, hess=False)
 
         if self.options["quality_function_predictor_corrector"]:
             return self._mehrotra(state, self.px, self.dpx, mu_nat, avg_comp)
@@ -439,12 +457,12 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         avg_comp,
     ):
         # Set up tau for trial-step probes
-        d_inf_qf, p_inf_qf, c_inf_qf = self.optimizer.compute_kkt_error_mu(
+        d_inf_qf, p_inf_qf, c_inf_qf = self.optimizer.compute_kkt_error(
             0.0, state.current, state.gradient
         )
 
         # Try to get rid of this call??
-        s_d_qf, s_c_qf = evaluator._compute_optimality_scaling(state)
+        s_d_qf, s_c_qf = evaluator.compute_optimality_scaling(state)
         nlp_error_qf = max(d_inf_qf / s_d_qf, p_inf_qf, c_inf_qf / s_c_qf)
 
         # Set the tau_qf value
@@ -564,7 +582,9 @@ class QualityFunctionBarrierStrategy(BarrierStrategy):
         self.optimizer.apply_step_update(
             alpha_x, alpha_z, state.current, state.step, self.temp
         )
-        trial_comp_sq = self.optimizer.compute_complementarity_sq(self.temp)
+        trial_comp_sq = self.optimizer.compute_sum_squared_complementarity(
+            mu_s, self.temp
+        )
 
         qf = (
             (1.0 - alpha_z) ** 2 * dual_inf * self.sd

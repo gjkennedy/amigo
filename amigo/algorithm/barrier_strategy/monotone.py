@@ -12,12 +12,11 @@ class MonotoneBarrierStrategy(BarrierStrategy):
 
     def update_barrier(self, evaluator, state):
         info = BarrierInfo()
-
-        opt_tol = self.options["convergence_tolerance"]
         relative_tol = self.options["barrier_progress_tol"]
-        frac = self.options["monotone_barrier_fraction"]
 
-        if state.residual_norm < relative_tol * state.mu:
+        if state.kkt_error < relative_tol * state.mu:
+            opt_tol = self.options["convergence_tolerance"]
+            frac = self.options["monotone_barrier_fraction"]
             mu_new = max(frac * state.mu, frac * opt_tol)
 
             info.new_barrier = True

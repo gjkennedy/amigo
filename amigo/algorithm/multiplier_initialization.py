@@ -69,7 +69,7 @@ class MultiplierInitializer:
         solver.factor(state.hessian, state.diagonal)
 
         # Compute the residual = grad f - zl + zu
-        self.optimizer.compute_dual_residual_vector(
+        self.optimizer.compute_dual_residual(
             state.current, state.gradient, state.residual
         )
         state.residual.scale(-1.0)

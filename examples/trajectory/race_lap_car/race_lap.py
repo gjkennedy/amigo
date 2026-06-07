@@ -64,7 +64,10 @@ mu0 = 1.68
 tau_x = 0.2
 tau_y = 0.2
 P_max = 960000.0
-EPS_THRUST = 0.00001
+
+# This parameter can make the problem significantly more challenging to solve
+EPS_THRUST = 0.01
+# EPS_THRUST = 0.00001
 
 scaling = {
     "t": 60.0,
@@ -434,9 +437,9 @@ x = model.create_vector()
 options = {
     "solver": "amigo",
     "initial_barrier_param": 1.0,
-    "max_iterations": 500,
+    "max_iterations": 200,
     "max_line_search_iterations": 30,
-    "convergence_tolerance": 1e-8,
+    "convergence_tolerance": 1e-10,
     "init_least_squares_multipliers": True,
     "barrier_strategy": "monotone",
     "quality_function_predictor_corrector": False,
