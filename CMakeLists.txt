@@ -247,6 +247,7 @@ if(AMIGO_ENABLE_CUDA)
     src/csr_factor_cuda.cu
     src/csr_matrix_backend.cu
     src/interior_point_backend.cu
+    src/vector_backend.cu
     src/vector_distribute.cu)
   target_compile_options(backend PRIVATE
     $<$<CONFIG:Debug>:-O0 -g>
