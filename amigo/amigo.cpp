@@ -382,6 +382,10 @@ PYBIND11_MODULE(amigo, mod) {
              std::memcpy(cols.mutable_data(), mat_cols, nnz * sizeof(int));
              return py::make_tuple(nrows, ncols, nnz, rowp, cols);
            })
+      .def("duplicate", &amigo::CSRMat<double>::duplicate)
+      .def("copy", &amigo::CSRMat<double>::copy)
+      .def("add_diagonal",
+           &amigo::CSRMat<double>::template add_diagonal<detail::policy>)
       .def("get_data",
            [](py::object self) -> py::array_t<double> {
              auto& mat = self.cast<amigo::CSRMat<double>&>();
@@ -721,7 +725,12 @@ PYBIND11_MODULE(amigo, mod) {
       .def(py::init<std::shared_ptr<amigo::CSRMat<double>>, double>(),
            py::arg("mat"), py::arg("pivot_tol") = 1e-12)
       .def("factor", &amigo::CSRMatFactorCuda::factor)
-      .def("solve", &amigo::CSRMatFactorCuda::solve);
+      .def("solve", &amigo::CSRMatFactorCuda::solve)
+      .def("get_inertia", [](amigo::CSRMatFactorCuda& self) {
+        int npos = 0, nneg = 0;
+        self.get_inertia(&npos, &nneg);
+        return py::make_tuple(npos, nneg);
+      });
 #endif
 
   py::class_<amigo::OptVector<double>,

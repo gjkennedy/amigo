@@ -38,7 +38,7 @@ AMIGO_DEVICE void add_gradient(T alpha, Data& data, Input& input, Input& grad) {
   }
 
   if constexpr (sizeof...(Remain) > 0) {
-    add_gradient<Input, Data, Remain...>(alpha, data, input, grad);
+    add_gradient<T, Input, Data, Remain...>(alpha, data, input, grad);
   }
 }
 
@@ -51,7 +51,7 @@ AMIGO_DEVICE void add_hessian_product(T alpha, Data& data, Input& input,
   }
 
   if constexpr (sizeof...(Remain) > 0) {
-    add_hessian_product<Input, Data, Remain...>(alpha, data, input, dir, h);
+    add_hessian_product<T, Input, Data, Remain...>(alpha, data, input, dir, h);
   }
 }
 
