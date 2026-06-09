@@ -566,13 +566,15 @@ PYBIND11_MODULE(amigo, mod) {
            py::arg("alpha"), py::arg("x"))
       .def("gradient",
            &amigo::OptimizationProblem<double, detail::policy>::gradient,
-           py::arg("alpha"), py::arg("x"), py::arg("grad"))
+           py::arg("alpha"), py::arg("x"), py::arg("grad"),
+           py::arg("zero_fixed_rows") = true)
       .def("create_matrix",
            &amigo::OptimizationProblem<double, detail::policy>::create_matrix,
            py::arg("loc") = amigo::MemoryLocation::HOST_AND_DEVICE)
       .def("hessian",
            &amigo::OptimizationProblem<double, detail::policy>::hessian,
-           py::arg("alpha"), py::arg("x"), py::arg("hess"))
+           py::arg("alpha"), py::arg("x"), py::arg("hess"),
+           py::arg("zero_fixed_rows_and_columns") = true)
       .def("scatter_vector",
            &amigo::OptimizationProblem<double,
                                        detail::policy>::scatter_vector<double>,
