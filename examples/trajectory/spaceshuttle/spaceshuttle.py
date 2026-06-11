@@ -273,7 +273,7 @@ parser.add_argument(
     "--build", dest="build", action="store_true", default=False, help="Enable building"
 )
 parser.add_argument(
-    "--solver", dest="solver", choices=["amigo", "mumps"], default="amigo"
+    "--solver", dest="solver", choices=["amigo", "mumps", "cuda"], default="amigo"
 )
 args = parser.parse_args()
 

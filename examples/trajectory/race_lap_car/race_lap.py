@@ -27,7 +27,7 @@ from tracks import load_track
 parser = argparse.ArgumentParser()
 parser.add_argument("--build", action="store_true")
 parser.add_argument(
-    "--solver", dest="solver", choices=["amigo", "mumps"], default="mumps"
+    "--solver", dest="solver", choices=["amigo", "mumps", "cuda"], default="amigo"
 )
 parser.add_argument(
     "--track",
@@ -147,7 +147,7 @@ class RacecarCollocation(am.Component):
             + df_rear / 2
         )
 
-        smooth_abs = (thrust * thrust + EPS_THRUST * EPS_THRUST) ** 0.5
+        smooth_abs = am.sqrt(thrust * thrust + EPS_THRUST * EPS_THRUST)
         throttle = 0.5 * (thrust + smooth_abs)
         brake = 0.5 * (-thrust + smooth_abs)
 
@@ -238,11 +238,7 @@ class NodeConstraints(am.Component):
         self.add_input("u", shape=2, lower=u_min, upper=u_max)
 
         # Add constraints
-        self.add_constraint("c_fl", lower=-am.inf, upper=1.0)
-        self.add_constraint("c_fr", lower=-am.inf, upper=1.0)
-        self.add_constraint("c_rl", lower=-am.inf, upper=1.0)
-        self.add_constraint("c_rr", lower=-am.inf, upper=1.0)
-        self.add_constraint("c_pow", lower=-am.inf, upper=1.0)
+        self.add_constraint("c", shape=5, lower=-am.inf, upper=1.0)
 
     def _node_constraints(self, q, u):
         V = self.scaling["V"] * q[2]
@@ -278,7 +274,7 @@ class NodeConstraints(am.Component):
             + df_rear / 2
         )
 
-        smooth_abs = (thrust * thrust + EPS_THRUST * EPS_THRUST) ** 0.5
+        smooth_abs = am.sqrt(thrust * thrust + EPS_THRUST * EPS_THRUST)
         throttle = 0.5 * (thrust + smooth_abs)
         brake = 0.5 * (-thrust + smooth_abs)
 
@@ -287,17 +283,17 @@ class NodeConstraints(am.Component):
         S_rl = (M * g / 2) * (throttle - brake * (1 - beta_brake))
         S_rr = (M * g / 2) * (throttle - brake * (1 - beta_brake))
 
-        F_rr = N_rr * k_lambda * (lam + omega * (b_wb + lam * tw) / V)
-        F_rl = N_rl * k_lambda * (lam + omega * (b_wb - lam * tw) / V)
-        F_fr = N_fr * k_lambda * (lam + delta - omega * (a_wb - lam * tw) / V)
-        F_fl = N_fl * k_lambda * (lam + delta - omega * (a_wb + lam * tw) / V)
+        fn_rr = k_lambda * (lam + omega * (b_wb + lam * tw) / V)
+        fn_rl = k_lambda * (lam + omega * (b_wb - lam * tw) / V)
+        fn_fr = k_lambda * (lam + delta - omega * (a_wb - lam * tw) / V)
+        fn_fl = k_lambda * (lam + delta - omega * (a_wb + lam * tw) / V)
 
         S_all = S_fl + S_fr + S_rl + S_rr
 
-        c_fl = (S_fl / (N_fl * mu0)) ** 2 + (F_fl / (N_fl * mu0)) ** 2
-        c_fr = (S_fr / (N_fr * mu0)) ** 2 + (F_fr / (N_fr * mu0)) ** 2
-        c_rl = (S_rl / (N_rl * mu0)) ** 2 + (F_rl / (N_rl * mu0)) ** 2
-        c_rr = (S_rr / (N_rr * mu0)) ** 2 + (F_rr / (N_rr * mu0)) ** 2
+        c_fl = (S_fl / (N_fl * mu0)) ** 2 + (fn_fl / mu0) ** 2
+        c_fr = (S_fr / (N_fr * mu0)) ** 2 + (fn_fr / mu0) ** 2
+        c_rl = (S_rl / (N_rl * mu0)) ** 2 + (fn_rl / mu0) ** 2
+        c_rr = (S_rr / (N_rr * mu0)) ** 2 + (fn_rr / mu0) ** 2
 
         return c_fl, c_fr, c_rl, c_rr, V * S_all / P_max
 
@@ -305,11 +301,7 @@ class NodeConstraints(am.Component):
         c_fl, c_fr, c_rl, c_rr, power_norm = self._node_constraints(
             self.inputs["q"], self.inputs["u"]
         )
-        self.constraints["c_fl"] = c_fl
-        self.constraints["c_fr"] = c_fr
-        self.constraints["c_rl"] = c_rl
-        self.constraints["c_rr"] = c_rr
-        self.constraints["c_pow"] = power_norm
+        self.constraints["c"] = [c_fl, c_fr, c_rl, c_rr, power_norm]
 
 
 class InitialTime(am.Component):
@@ -426,7 +418,8 @@ if args.build:
     model.build_module()
 
 model.initialize()
-print(f"Variables: {model.num_variables}, Constraints: {model.num_constraints}")
+print(f"Variables:   {model.num_variables}")
+print(f"Constraints: {model.num_constraints}")
 
 with open("race_car_lap.json", "w") as fp:
     json.dump(model.serialize(), fp, indent=2)
@@ -435,7 +428,7 @@ with open("race_car_lap.json", "w") as fp:
 x = model.create_vector()
 
 options = {
-    "solver": "amigo",
+    "solver": args.solver,
     "initial_barrier_param": 1.0,
     "max_iterations": 200,
     "max_line_search_iterations": 30,
@@ -452,6 +445,9 @@ options = {
 
 opt = am.Optimizer(model, x=x)
 opt_data = opt.optimize(options)
+
+# Copy the results back to the CPU
+x.copy_device_to_host()
 
 # Results
 print(f"\nConverged: {opt_data['converged']}")
@@ -490,11 +486,11 @@ for name, vals in [
 ]:
     print(f"  {name}: {vals[0]:.6f} vs {vals[-1]:.6f}")
 
-c_fl_sol = np.array(x["nc.c_fl"])
-c_fr_sol = np.array(x["nc.c_fr"])
-c_rl_sol = np.array(x["nc.c_rl"])
-c_rr_sol = np.array(x["nc.c_rr"])
-c_pow_sol = np.array(x["nc.c_pow"])
+c_fl_sol = np.array(x["nc.c[:, 0]"])
+c_fr_sol = np.array(x["nc.c[:, 1]"])
+c_rl_sol = np.array(x["nc.c[:, 2]"])
+c_rr_sol = np.array(x["nc.c[:, 3]"])
+c_pow_sol = np.array(x["nc.c[:, 4]"])
 
 print(f"\nConstraint max (should be <= 1):")
 for name, vals in [

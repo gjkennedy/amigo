@@ -47,6 +47,7 @@ AMIGO_DEVICE void add_hessian_product(T alpha, Data& data, Input& input,
                                       Input& dir, Input& h) {
   if constexpr (!Component::is_compute_empty) {
     Input grad;
+    grad.zero();
     Component::hessian(alpha, data, input, dir, grad, h);
   }
 
@@ -134,7 +135,7 @@ AMIGO_KERNEL void hessian_product_kernel_atomic(
     const T* data_values, const T* vec_values, const T* dir_values,
     T* grad_values) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index > num_elements) {
+  if (index >= num_elements) {
     return;
   }
 
@@ -162,8 +163,8 @@ AMIGO_KERNEL void hessian_kernel_atomic(int num_elements, T alpha,
                                         const T* data_values,
                                         const T* vec_values, T* csr_data) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
-  int row = blockIdx.y;
-  if (index >= num_elements) {
+  int col = blockIdx.y;
+  if (index >= num_elements || col >= ncomp) {
     return;
   }
 
@@ -174,13 +175,13 @@ AMIGO_KERNEL void hessian_kernel_atomic(int num_elements, T alpha,
 
   h.zero();
   dir.zero();
-  dir[row] = 1.0;
+  dir[col] = 1.0;
   add_hessian_product<T, Input, Data, Components...>(alpha, data, input, dir,
                                                      h);
 
   // Now add the Hessian contribution
   for (int i = 0; i < ncomp; i++) {
-    int pos = csr_pos[ncomp * (ncomp * index + row) + i];
+    int pos = csr_pos[ncomp * (ncomp * index + col) + i];
     if (pos >= 0) {
       atomicAdd(&csr_data[pos], h[i]);
     }
@@ -270,8 +271,8 @@ class CudaGroupBackend {
     int num_elements;
     const int* data_indices;
     const int* vec_indices;
-    data_layout.get_device_data(&num_elements, nullptr, &data_indices);
-    layout.get_device_data(nullptr, nullptr, &vec_indices);
+    data_layout.get_device_data(nullptr, nullptr, &data_indices);
+    layout.get_device_data(&num_elements, nullptr, &vec_indices);
 
     const T* data_values = data_vec.get_device_array();
     const T* vec_values = vec.get_device_array();
@@ -306,8 +307,12 @@ class CudaGroupBackend {
     int num_elements;
     const int* data_indices;
     const int* vec_indices;
-    data_layout.get_device_data(&num_elements, nullptr, &data_indices);
-    layout.get_device_data(nullptr, nullptr, &vec_indices);
+    data_layout.get_device_data(nullptr, nullptr, &data_indices);
+    layout.get_device_data(&num_elements, nullptr, &vec_indices);
+
+    if (num_elements <= 0) {
+      return;
+    }
 
     const T* data_values = data_vec.get_device_array();
     const T* vec_values = vec.get_device_array();
@@ -333,8 +338,12 @@ class CudaGroupBackend {
     int num_elements;
     const int* data_indices;
     const int* vec_indices;
-    data_layout.get_device_data(&num_elements, nullptr, &data_indices);
-    layout.get_device_data(nullptr, nullptr, &vec_indices);
+    data_layout.get_device_data(nullptr, nullptr, &data_indices);
+    layout.get_device_data(&num_elements, nullptr, &vec_indices);
+
+    if (num_elements <= 0) {
+      return;
+    }
 
     dim3 grid((num_elements + TPB - 1) / TPB);
     dim3 block(TPB);
@@ -361,8 +370,12 @@ class CudaGroupBackend {
     int num_elements;
     const int* data_indices;
     const int* vec_indices;
-    data_layout.get_device_data(&num_elements, nullptr, &data_indices);
-    layout.get_device_data(nullptr, nullptr, &vec_indices);
+    data_layout.get_device_data(nullptr, nullptr, &data_indices);
+    layout.get_device_data(&num_elements, nullptr, &vec_indices);
+
+    if (num_elements <= 0) {
+      return;
+    }
 
     dim3 grid((num_elements + TPB - 1) / TPB, ncomp);
     dim3 block(TPB);

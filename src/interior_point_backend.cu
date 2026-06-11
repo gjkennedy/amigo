@@ -80,9 +80,9 @@ void project_primals_into_interior_cuda(const OptProblemInfo<T>& info, T* xlam,
     return;
   }
   int grid = (info.num_primals + IPM_TPB - 1) / IPM_TPB;
-  project_primals_into_interior_kernel<T><<<grid, IPM_TPB, 0, stream>>>(
-      info.num_primals, info.primal_indices, info.lbx, info.ubx, kappa1, kappa2,
-      xlam);
+  project_primals_into_interior_kernel<T>
+      <<<grid, IPM_TPB, 0, stream>>>(info.num_primals, info.primal_indices,
+                                     info.lbx, info.ubx, kappa1, kappa2, xlam);
 }
 
 // =========================================================================
@@ -111,9 +111,8 @@ void initialize_bound_duals_cuda(T mu, const OptProblemInfo<T>& info,
     return;
   }
   int grid = (info.num_primals + IPM_TPB - 1) / IPM_TPB;
-  initialize_bound_duals_kernel<T>
-      <<<grid, IPM_TPB, 0, stream>>>(info.num_primals, mu, info.lbx, info.ubx,
-                                     zl, zu);
+  initialize_bound_duals_kernel<T><<<grid, IPM_TPB, 0, stream>>>(
+      info.num_primals, mu, info.lbx, info.ubx, zl, zu);
 }
 
 // =========================================================================
@@ -149,8 +148,9 @@ AMIGO_KERNEL void compute_residual_primal_kernel(T mu, OptProblemInfo<T> info,
 }
 
 template <typename T>
-AMIGO_KERNEL void compute_residual_constraint_kernel(
-    OptProblemInfo<T> info, const T* __restrict__ grad, T* __restrict__ res) {
+AMIGO_KERNEL void compute_residual_constraint_kernel(OptProblemInfo<T> info,
+                                                     const T* __restrict__ grad,
+                                                     T* __restrict__ res) {
   int j = blockDim.x * blockIdx.x + threadIdx.x;
   if (j >= info.num_constraints) {
     return;
@@ -211,8 +211,7 @@ void compute_diagonal_cuda(const OptProblemInfo<T>& info,
     return;
   }
   int grid = (info.num_primals + IPM_TPB - 1) / IPM_TPB;
-  compute_diagonal_kernel<T>
-      <<<grid, IPM_TPB, 0, stream>>>(info, current, diag);
+  compute_diagonal_kernel<T><<<grid, IPM_TPB, 0, stream>>>(info, current, diag);
 }
 
 // =========================================================================
@@ -488,8 +487,8 @@ void apply_step_cuda(T ax, T az, const OptProblemInfo<T>& info,
 template <typename T>
 AMIGO_KERNEL void compute_complementarity_kernel(OptProblemInfo<T> info,
                                                  OptState<const T> current,
-                                                 T init_min,
-                                                 T* d_partial_sum, T* d_min) {
+                                                 T init_min, T* d_partial_sum,
+                                                 T* d_min) {
   extern __shared__ unsigned char smem[];
   T* s_sum0 = reinterpret_cast<T*>(smem);
   T* s_sum1 = s_sum0 + blockDim.x;
@@ -757,8 +756,8 @@ T compute_log_barrier_cuda(T mu, const OptProblemInfo<T>& info,
     int block_size = IPM_TPB;
     int grid_size = 1;
     size_t shmem = block_size * sizeof(T);
-    compute_log_barrier_kernel<T><<<grid_size, block_size, shmem, stream>>>(
-        mu, info, current, d_out);
+    compute_log_barrier_kernel<T>
+        <<<grid_size, block_size, shmem, stream>>>(mu, info, current, d_out);
   }
 
   AMIGO_CHECK_CUDA(cudaStreamSynchronize(stream));
@@ -1024,10 +1023,12 @@ template void compute_bound_dual_step_cuda<double>(
     OptState<const double>& current, const double* px, double* dzl, double* dzu,
     cudaStream_t stream);
 
-template void compute_max_step_cuda<double>(
-    double tau, const OptProblemInfo<double>& info,
-    OptState<const double>& current, OptState<const double>& step, double& ax,
-    int& xi, double& az, int& zi, cudaStream_t stream);
+template void compute_max_step_cuda<double>(double tau,
+                                            const OptProblemInfo<double>& info,
+                                            OptState<const double>& current,
+                                            OptState<const double>& step,
+                                            double& ax, int& xi, double& az,
+                                            int& zi, cudaStream_t stream);
 
 template void apply_step_cuda<double>(double ax, double az,
                                       const OptProblemInfo<double>& info,
@@ -1040,10 +1041,12 @@ template void compute_complementarity_cuda<double>(
     const OptProblemInfo<double>& info, OptState<const double>& current,
     double partial_sum[], double& local_min, cudaStream_t stream);
 
-template void compute_kkt_error_cuda<double>(
-    double mu, const OptProblemInfo<double>& info,
-    OptState<const double>& current, const double* grad, double& dual,
-    double& primal, double& comp, cudaStream_t stream);
+template void compute_kkt_error_cuda<double>(double mu,
+                                             const OptProblemInfo<double>& info,
+                                             OptState<const double>& current,
+                                             const double* grad, double& dual,
+                                             double& primal, double& comp,
+                                             cudaStream_t stream);
 
 template double compute_log_barrier_cuda<double>(
     double mu, const OptProblemInfo<double>& info,
@@ -1089,9 +1092,8 @@ template void compute_diagonal_cuda<float>(const OptProblemInfo<float>& info,
                                            float* diag, cudaStream_t stream);
 
 template void compute_bound_dual_step_cuda<float>(
-    float mu, const OptProblemInfo<float>& info,
-    OptState<const float>& current, const float* px, float* dzl, float* dzu,
-    cudaStream_t stream);
+    float mu, const OptProblemInfo<float>& info, OptState<const float>& current,
+    const float* px, float* dzl, float* dzu, cudaStream_t stream);
 
 template void compute_max_step_cuda<float>(float tau,
                                            const OptProblemInfo<float>& info,
@@ -1119,17 +1121,16 @@ template void compute_kkt_error_cuda<float>(float mu,
                                             cudaStream_t stream);
 
 template float compute_log_barrier_cuda<float>(
-    float mu, const OptProblemInfo<float>& info,
-    OptState<const float>& current, cudaStream_t stream);
-
-template float compute_log_barrier_derivative_cuda<float>(
-    float mu, const OptProblemInfo<float>& info,
-    OptState<const float>& current, OptState<const float>& step,
+    float mu, const OptProblemInfo<float>& info, OptState<const float>& current,
     cudaStream_t stream);
 
+template float compute_log_barrier_derivative_cuda<float>(
+    float mu, const OptProblemInfo<float>& info, OptState<const float>& current,
+    OptState<const float>& step, cudaStream_t stream);
+
 template float compute_sum_squared_complementarity_cuda<float>(
-    float mu, const OptProblemInfo<float>& info,
-    OptState<const float>& current, cudaStream_t stream);
+    float mu, const OptProblemInfo<float>& info, OptState<const float>& current,
+    cudaStream_t stream);
 
 template float compute_infeasibility_cuda<float>(
     const OptProblemInfo<float>& info, const float* grad, cudaStream_t stream);

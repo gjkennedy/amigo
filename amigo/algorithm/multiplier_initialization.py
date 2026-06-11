@@ -10,8 +10,9 @@ step.  The third option sets all multipliers to zero.
 
 
 class MultiplierInitializer:
-    def __init__(self, options, problem, optimizer):
+    def __init__(self, options, model, problem, optimizer):
         self.options = options
+        self.model = model
         self.problem = problem
         self.optimizer = optimizer
 

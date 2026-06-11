@@ -246,7 +246,6 @@ parser.add_argument(
     default="amigo",
     help="Solver type",
 )
-
 args = parser.parse_args()
 
 model = create_cart_model(num_time_steps=args.num_time_steps)
