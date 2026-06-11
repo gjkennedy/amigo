@@ -33,7 +33,9 @@ class MatrixDistribute {
       if (policy == ExecPolicy::CUDA) {
 #ifdef AMIGO_USE_CUDA
         send_A = new T[num_send_entries];
-        AMIGO_CHECK_CUDA(cudaMalloc(&d_recv_A, num_recv_entries * sizeof(T)));
+        if (num_recv_entries > 0) {
+          AMIGO_CHECK_CUDA(cudaMalloc(&d_recv_A, num_recv_entries * sizeof(T)));
+        }
 #endif  // AMIGO_USE_CUDA
       }
 
@@ -99,7 +101,7 @@ class MatrixDistribute {
                                     cudaMemcpyHostToDevice));
         detail::add_buffer_values_kernel_cuda(num_recv_entries, recv_loc_array,
                                               d_recv_A, d_data);
-
+        AMIGO_CHECK_CUDA(cudaGetLastError());
 #endif  // AMIGO_USE_CUDA
       }
     }

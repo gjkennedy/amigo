@@ -207,7 +207,12 @@ class InteriorPointOptimizer {
 #ifdef AMIGO_USE_CUDA
     else {
       detail::project_primals_into_interior_cuda(info, xlam);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+      AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
+
       detail::initialize_bound_duals_cuda(mu, info, xlam, zl, zu);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+      AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
     }
 #endif
   }
@@ -242,6 +247,7 @@ class InteriorPointOptimizer {
 #ifdef AMIGO_USE_CUDA
     else {
       detail::compute_residual_cuda(mu, info, pt, g, r);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
 
@@ -274,6 +280,7 @@ class InteriorPointOptimizer {
 #ifdef AMIGO_USE_CUDA
     else {
       detail::compute_diagonal_cuda(info, pt, diag);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
   }
@@ -311,6 +318,7 @@ class InteriorPointOptimizer {
     else {
       detail::compute_bound_dual_step_cuda(
           mu, info, current, px->template get_array<policy>(), dzl, dzu);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
   }
@@ -345,6 +353,7 @@ class InteriorPointOptimizer {
 #ifdef AMIGO_USE_CUDA
     else {
       detail::compute_max_step_cuda(tau, info, current, step, ax, xi, az, zi);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
   }
@@ -375,6 +384,7 @@ class InteriorPointOptimizer {
 #ifdef AMIGO_USE_CUDA
     else {
       detail::apply_step_cuda(ax, az, info, current, step, result_state);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
   }
@@ -400,6 +410,7 @@ class InteriorPointOptimizer {
 #ifdef AMIGO_USE_CUDA
     else {
       detail::compute_complementarity_cuda(info, s, ps, lm);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
 
@@ -448,6 +459,7 @@ class InteriorPointOptimizer {
     else {
       detail::compute_kkt_error_cuda(
           mu, info, s, grad->template get_array<policy>(), ld, lp, lc);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
 
@@ -481,6 +493,7 @@ class InteriorPointOptimizer {
 #ifdef AMIGO_USE_CUDA
     else {
       local = detail::compute_log_barrier_cuda(mu, info, current);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
 
@@ -518,6 +531,7 @@ class InteriorPointOptimizer {
     else {
       local =
           detail::compute_log_barrier_derivative_cuda(mu, info, current, step);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
 
@@ -546,6 +560,7 @@ class InteriorPointOptimizer {
     else {
       local =
           detail::compute_sum_squared_complementarity_cuda(mu, info, current);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
 
@@ -570,6 +585,7 @@ class InteriorPointOptimizer {
 #ifdef AMIGO_USE_CUDA
     else {
       local = detail::compute_infeasibility_cuda(info, grad);
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
 
@@ -606,6 +622,7 @@ class InteriorPointOptimizer {
       detail::compute_dual_residual_cuda(
           info, s, grad->template get_array<policy>(),
           out->template get_array<policy>(), out->get_size());
+      AMIGO_CHECK_CUDA(cudaGetLastError());
     }
 #endif
   }

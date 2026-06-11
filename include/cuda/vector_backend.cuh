@@ -104,12 +104,18 @@ class CudaVecBackend {
     AMIGO_CHECK_CUBLAS(cublasCreate(&handle));
   }
   ~CudaVecBackend() {
-    if (d_ptr) cudaFree(d_ptr);
-    if (handle) cublasDestroy(handle);
+    if (d_ptr) {
+      cudaFree(d_ptr);
+    }
+    if (handle) {
+      cublasDestroy(handle);
+    }
   }
 
   void allocate(int size_) {
-    if (d_ptr) cudaFree(d_ptr);
+    if (d_ptr) {
+      cudaFree(d_ptr);
+    }
     size = size_;
     AMIGO_CHECK_CUDA(cudaMalloc(&d_ptr, size * sizeof(T)));
   }

@@ -177,7 +177,9 @@ class Optimizer:
         slack_init.initialize_slacks(self.evaluator, self.state)
 
         # Initialize the multipliers
-        multiplier_init = MultiplierInitializer(options, self.problem, self.optimizer)
+        multiplier_init = MultiplierInitializer(
+            options, self.model, self.problem, self.optimizer
+        )
         multiplier_init.initialize_multipliers(self.evaluator, self.solver, self.state)
 
         # Set the initial status

@@ -70,7 +70,9 @@ class VectorDistribute {
       if (policy == ExecPolicy::CUDA) {
 #ifdef AMIGO_USE_CUDA
         recv_buffer = new T[num_recv_nodes];
-        AMIGO_CHECK_CUDA(cudaMalloc(&d_send_buffer, nnodes * sizeof(T)));
+        if (nnodes > 0) {
+          AMIGO_CHECK_CUDA(cudaMalloc(&d_send_buffer, nnodes * sizeof(T)));
+        }
 #endif  // AMIGO_USE_CUDA
       }
 
@@ -118,9 +120,12 @@ class VectorDistribute {
 #ifdef AMIGO_USE_CUDA
         detail::set_buffer_values_kernel_cuda(nnodes, nodes, array,
                                               d_send_buffer);
-        AMIGO_CHECK_CUDA(cudaMemcpy(send_buffer, d_send_buffer,
-                                    nnodes * sizeof(T),
-                                    cudaMemcpyDeviceToHost));
+        AMIGO_CHECK_CUDA(cudaGetLastError());
+        if (nnodes > 0) {
+          AMIGO_CHECK_CUDA(cudaMemcpy(send_buffer, d_send_buffer,
+                                      nnodes * sizeof(T),
+                                      cudaMemcpyDeviceToHost));
+        }
 #endif  // AMIGO_USE_CUDA
       }
       return send_buffer;
@@ -137,9 +142,11 @@ class VectorDistribute {
     void forward_set_recv_values(T* array) {
       if constexpr (policy == ExecPolicy::CUDA) {
 #ifdef AMIGO_USE_CUDA
-        AMIGO_CHECK_CUDA(cudaMemcpy(&array + num_owned_nodes, recv_buffer,
-                                    num_recv_nodes * sizeof(T),
-                                    cudaMemcpyHostToDevice));
+        if (num_recv_nodes > 0) {
+          AMIGO_CHECK_CUDA(cudaMemcpy(&array + num_owned_nodes, recv_buffer,
+                                      num_recv_nodes * sizeof(T),
+                                      cudaMemcpyHostToDevice));
+        }
 #endif  // AMIGO_USE_CUDA
       }
     }
@@ -163,11 +170,14 @@ class VectorDistribute {
         add_buffer_values_kernel(nnodes, nodes, send_buffer, array);
       } else {
 #ifdef AMIGO_USE_CUDA
-        AMIGO_CHECK_CUDA(cudaMemcpy(d_send_buffer, send_buffer,
-                                    nnodes * sizeof(T),
-                                    cudaMemcpyHostToDevice));
+        if (nnodes > 0) {
+          AMIGO_CHECK_CUDA(cudaMemcpy(d_send_buffer, send_buffer,
+                                      nnodes * sizeof(T),
+                                      cudaMemcpyHostToDevice));
+        }
         detail::add_buffer_values_kernel_cuda(nnodes, nodes, d_send_buffer,
                                               array);
+        AMIGO_CHECK_CUDA(cudaGetLastError());
 #endif  // AMIGO_USE_CUDA
       }
     }

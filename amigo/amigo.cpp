@@ -24,6 +24,16 @@ typedef SSIZE_T ssize_t;
 #include "cuda/csr_factor_cuda.h"
 #endif
 
+// External instantiations of the slack coupling group
+namespace amigo {
+#ifdef AMIGO_USE_CUDA
+extern template class ComponentGroup<double, ExecPolicy::CUDA,
+                                     SlackComponent__<double>>;
+extern template class ComponentGroup<float, ExecPolicy::CUDA,
+                                     SlackComponent__<float>>;
+#endif  // AMIGO_USE_CUDA
+}  // namespace amigo
+
 namespace py = pybind11;
 
 template <typename T>

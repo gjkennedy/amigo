@@ -926,6 +926,9 @@ class OptimizationProblem {
   void add_diagonal(std::shared_ptr<Vector<T>> diag,
                     std::shared_ptr<CSRMat<T>> mat) {
     mat->template add_diagonal<policy>(diag);
+#ifdef AMIGO_USE_CUDA
+    AMIGO_CHECK_CUDA(cudaGetLastError());
+#endif
   }
 
   /**
@@ -940,6 +943,9 @@ class OptimizationProblem {
 
     for (size_t i = 0; i < components.size(); i++) {
       components[i]->update(*x);
+#ifdef AMIGO_USE_CUDA
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+#endif
     }
   }
 
@@ -959,6 +965,9 @@ class OptimizationProblem {
       // Only sum over components that are not continuation components
       if (!components[i]->is_continuation()) {
         lagrange += components[i]->lagrangian(alpha, *data_vec, *x);
+#ifdef AMIGO_USE_CUDA
+        AMIGO_CHECK_CUDA(cudaGetLastError());
+#endif
       }
     }
 
@@ -986,9 +995,15 @@ class OptimizationProblem {
       // components
       if (!components[i]->is_continuation()) {
         components[i]->add_gradient(alpha, *data_vec, *x, *g);
+#ifdef AMIGO_USE_CUDA
+        AMIGO_CHECK_CUDA(cudaGetLastError());
+#endif
       }
     }
 
+#ifdef AMIGO_USE_CUDA
+    AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
+#endif
     var_dist.begin_reverse_add(g, var_ctx);
     var_dist.end_reverse_add(g, var_ctx);
 
@@ -1019,7 +1034,14 @@ class OptimizationProblem {
     h->zero();
     for (size_t i = 0; i < components.size(); i++) {
       components[i]->add_hessian_product(alpha, *data_vec, *x, *p, *h);
+#ifdef AMIGO_USE_CUDA
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+#endif
     }
+
+#ifdef AMIGO_USE_CUDA
+    AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
+#endif
 
     var_dist.begin_reverse_add(h, var_ctx);
     var_dist.end_reverse_add(h, var_ctx);
@@ -1048,7 +1070,13 @@ class OptimizationProblem {
     matrix->zero();
     for (size_t i = 0; i < components.size(); i++) {
       components[i]->add_hessian(alpha, *data_vec, *x, *var_owners, *matrix);
+#ifdef AMIGO_USE_CUDA
+      AMIGO_CHECK_CUDA(cudaGetLastError());
+#endif
     }
+#ifdef AMIGO_USE_CUDA
+    AMIGO_CHECK_CUDA(cudaDeviceSynchronize());
+#endif
 
     mat_dist->begin_assembly(matrix, mat_dist_ctx);
     mat_dist->end_assembly(matrix, mat_dist_ctx);
@@ -1059,8 +1087,8 @@ class OptimizationProblem {
   }
 
   /**
-   * @brief Compute the Jacobian of the gradient of the Lagrangian wrt the input
-   * data
+   * @brief Compute the Jacobian of the gradient of the Lagrangian wrt the
+   * input data
    *
    * @param x The design variable vector
    * @param jac The Jacobian of the gradient wrt the data
@@ -1364,8 +1392,10 @@ class OptimizationProblem {
    * @brief Create a functor that returns the number of nodes and node
    * numbers, given an element index
    *
-   * @param intervals Data structure that stores the intervals for the elements
-   * @return The functor returning number of nodes per element and element nodes
+   * @param intervals Data structure that stores the intervals for the
+   * elements
+   * @return The functor returning number of nodes per element and element
+   * nodes
    */
   auto get_element_nodes(std::vector<int>& intervals) const {
     intervals.resize(components.size() + 1);
@@ -1413,7 +1443,8 @@ class OptimizationProblem {
    * @brief Create a functor that returns the number of nodes and node numbers
    * for the data, given an element index
    *
-   * @param intervals Data structure that stores the intervals for the elements
+   * @param intervals Data structure that stores the intervals for the
+   * elements
    * @return The functor returning the data per element and data indices
    */
   auto get_element_data(std::vector<int>& intervals) const {
@@ -1462,7 +1493,8 @@ class OptimizationProblem {
    * @brief Create a functor that returns the number of outputs and output
    * numbers given an element index
    *
-   * @param intervals Data structure that stores the intervals for the elements
+   * @param intervals Data structure that stores the intervals for the
+   * elements
    * @return The functor returning the outputs per element and output indices
    */
   auto get_element_output(std::vector<int>& intervals) const {

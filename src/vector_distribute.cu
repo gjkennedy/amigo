@@ -34,6 +34,10 @@ AMIGO_KERNEL void add_buffer_values(int nnodes, const int* nodes,
 template <typename T>
 void set_buffer_values_kernel_cuda(int nnodes, const int* nodes, const T* array,
                                    T* buffer) {
+  if (nnodes <= 0) {
+    return;
+  }
+
   constexpr int TPB = 256;
   int grid = (nnodes + TPB - 1) / TPB;
   set_buffer_values<T><<<grid, TPB>>>(nnodes, nodes, array, buffer);
@@ -42,6 +46,10 @@ void set_buffer_values_kernel_cuda(int nnodes, const int* nodes, const T* array,
 template <typename T>
 void add_buffer_values_kernel_cuda(int nnodes, const int* nodes,
                                    const T* buffer, T* array) {
+  if (nnodes <= 0) {
+    return;
+  }
+
   constexpr int TPB = 256;
   int grid = (nnodes + TPB - 1) / TPB;
   add_buffer_values<T><<<grid, TPB>>>(nnodes, nodes, buffer, array);

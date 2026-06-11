@@ -23,13 +23,17 @@ AMIGO_DEVICE inline T abs_value(T x) {
 template <typename T>
 AMIGO_KERNEL void vec_fill_kernel(int n, T value, T* __restrict__ d_ptr) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) d_ptr[i] = value;
+  if (i < n) {
+    d_ptr[i] = value;
+  }
 }
 
 template <typename T>
 AMIGO_KERNEL void vec_add_scalar_kernel(int n, T value, T* __restrict__ d_ptr) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) d_ptr[i] += value;
+  if (i < n) {
+    d_ptr[i] += value;
+  }
 }
 
 template <typename T>
@@ -47,21 +51,27 @@ template <typename T>
 AMIGO_KERNEL void vec_fill_at_kernel(int n, const int* __restrict__ d_idx,
                                      T value, T* __restrict__ d_ptr) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) d_ptr[d_idx[i]] = value;
+  if (i < n) {
+    d_ptr[d_idx[i]] = value;
+  }
 }
 
 template <typename T>
 AMIGO_KERNEL void vec_add_scalar_at_kernel(int n, const int* __restrict__ d_idx,
                                            T scalar, T* __restrict__ d_ptr) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) d_ptr[d_idx[i]] += scalar;
+  if (i < n) {
+    d_ptr[d_idx[i]] += scalar;
+  }
 }
 
 template <typename T>
 AMIGO_KERNEL void vec_scale_at_kernel(int n, const int* __restrict__ d_idx,
                                       T alpha, T* __restrict__ d_ptr) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) d_ptr[d_idx[i]] *= alpha;
+  if (i < n) {
+    d_ptr[d_idx[i]] *= alpha;
+  }
 }
 
 template <typename T>
@@ -80,7 +90,9 @@ AMIGO_KERNEL void vec_get_values_at_kernel(int n, const int* __restrict__ d_idx,
                                            const T* __restrict__ d_ptr,
                                            T* __restrict__ d_vals) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) d_vals[i] = d_ptr[d_idx[i]];
+  if (i < n) {
+    d_vals[i] = d_ptr[d_idx[i]];
+  }
 }
 
 template <typename T>
@@ -88,7 +100,9 @@ AMIGO_KERNEL void vec_set_values_at_kernel(int n, const int* __restrict__ d_idx,
                                            const T* __restrict__ d_vals,
                                            T* __restrict__ d_ptr) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) d_ptr[d_idx[i]] = d_vals[i];
+  if (i < n) {
+    d_ptr[d_idx[i]] = d_vals[i];
+  }
 }
 
 // -------------------------------------------------------------------------
