@@ -37,6 +37,9 @@ def get_default_options(options={}):
         "equal_primal_dual_step": False,
         "init_least_squares_multipliers": True,
         "init_affine_step_multipliers": False,
+        # Recompute constraint multipliers from the least-squares estimate near feasibility
+        "recompute_multipliers": True,
+        "recompute_multiplier_tol": 1e-1,
         # Solver options
         "solver": "amigo",
         # Heuristic barrier parameter options

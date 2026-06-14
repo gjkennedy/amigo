@@ -252,6 +252,17 @@ class Optimizer:
                 if line_search_info.success:
                     do_feasible_resto = False
 
+                    # Recompute multipliers near feasibility to stop dual drift
+                    if (
+                        options["recompute_multipliers"]
+                        and options["init_least_squares_multipliers"]
+                        and self.state.primal_infeas
+                        < options["recompute_multiplier_tol"]
+                    ):
+                        multiplier_init.compute_least_squares_multipliers(
+                            self.evaluator, self.solver, self.state
+                        )
+
             # If the line search was not successful, perform feasibility restoration
             if do_feasible_resto:
                 warnings.warn("Feasibility restoration phase not implemented")
