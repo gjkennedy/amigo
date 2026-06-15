@@ -252,6 +252,11 @@ class Optimizer:
                 if line_search_info.success:
                     do_feasible_resto = False
 
+                    # Refresh multipliers near feasibility to prevent dual divergence
+                    multiplier_init.recompute_multipliers(
+                        self.evaluator, self.solver, self.state
+                    )
+
             # If the line search was not successful, perform feasibility restoration
             if do_feasible_resto:
                 warnings.warn("Feasibility restoration phase not implemented")
