@@ -70,7 +70,8 @@ jobs:
           cd ThirdParty-Mumps
           ./get.Mumps
           ./configure --prefix=$HOME/mumps-coinor
-          make -j$(nproc)
+          # Parallel build can race on Fortran .mod ordering; fall back to serial
+          make -j$(nproc) || make
           make install
           echo "MUMPS_LIB_DIR=$HOME/mumps-coinor/lib" >> $GITHUB_ENV
 
